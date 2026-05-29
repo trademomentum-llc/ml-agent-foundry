@@ -838,7 +838,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Start new flywheel run
-  app.post("/api/flywheel/runs", isAuthenticated, async (req: any, res) => {
+  app.post("/api/flywheel/runs", rateLimiter, isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const { name, targetWorkload, description } = req.body;
@@ -867,7 +867,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get model evaluations
-  app.get("/api/flywheel/evaluations", isAuthenticated, async (req: any, res) => {
+  app.get("/api/flywheel/evaluations", rateLimiter, isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       await auditLogger.log(userId, "flywheel.evaluations.view", "flywheel", null, req);
@@ -905,7 +905,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get optimizations
-  app.get("/api/flywheel/optimizations", isAuthenticated, async (req: any, res) => {
+  app.get("/api/flywheel/optimizations", rateLimiter, isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       await auditLogger.log(userId, "flywheel.optimizations.view", "flywheel", null, req);
