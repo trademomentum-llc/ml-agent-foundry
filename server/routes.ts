@@ -769,7 +769,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/foundation-model/intent-analysis", isAuthenticated, async (req: any, res) => {
+  app.post("/api/foundation-model/intent-analysis", isAuthenticated, rateLimiter, async (req: any, res) => {
     try {
       const { text } = req.body;
       const analysis = await foundationModel.analyzeIntent(text);
