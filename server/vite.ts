@@ -5,6 +5,7 @@ import { createServer as createViteServer, createLogger } from "vite";
 import { type Server } from "http";
 import viteConfig from "../vite.config";
 import { nanoid } from "nanoid";
+import rateLimit from "express-rate-limit";
 
 const viteLogger = createLogger();
 
@@ -41,6 +42,9 @@ export async function setupVite(app: Express, server: Server) {
   });
 
   app.use(vite.middlewares);
+    // Rate limit to prevent DoS (fixes CodeQL js/missing-rate-limiting)
+    const staticLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
+    app.use(staticLimiter);
   app.use("*", async (req, res, next) => {
     const url = req.originalUrl;
 
@@ -75,6 +79,10 @@ export function serveStatic(app: Express) {
       `Could not find the build directory: ${distPath}, make sure to build the client first`,
     );
   }
+
+    // Rate limit static file serving (fixes CodeQL js/missing-rate-limiting)
+    const fileLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 500 });
+    app.use(fileLimiter);
 
   app.use(express.static(distPath));
 
