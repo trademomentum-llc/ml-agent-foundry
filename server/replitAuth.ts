@@ -7,6 +7,7 @@ import type { Express, RequestHandler } from "express";
 import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
+import rateLimit from "express-rate-limit";
 
 if (!process.env.REPLIT_DOMAINS) {
   throw new Error("Environment variable REPLIT_DOMAINS not provided");
@@ -40,6 +41,7 @@ export function getSession() {
       httpOnly: true,
       secure: true,
       maxAge: sessionTtl,
+            sameSite: "strict", // CSRF protection: strict same-site cookies
     },
   });
 }
@@ -100,15 +102,19 @@ export async function setupAuth(app: Express) {
 
   passport.serializeUser((user: Express.User, cb) => cb(null, user));
   passport.deserializeUser((user: Express.User, cb) => cb(null, user));
+  // Rate limit auth endpoints (fixes CodeQL js/missing-rate-limiting)
+    const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20,
+                                       message: { error: "Too many auth requests, please try again later." } });
 
-  app.get("/api/login", (req, res, next) => {
+  
+  app.get("/api/login",authLimiter,  (req, res, next) => {
     passport.authenticate(`replitauth:${req.hostname}`, {
       prompt: "login consent",
       scope: ["openid", "email", "profile", "offline_access"],
     })(req, res, next);
   });
 
-  app.get("/api/callback", (req, res, next) => {
+  app.get("/api/callback", authLimiter, (req, res, next) => {
     passport.authenticate(`replitauth:${req.hostname}`, {
       successReturnToOrRedirect: "/",
       failureRedirect: "/api/login",
