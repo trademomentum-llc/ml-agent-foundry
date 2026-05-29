@@ -45,9 +45,9 @@ class AuditLogger {
       const logMessage = `[${logLevel}] ${userId || "system"} - ${action} on ${resource}${resourceId ? ` (${resourceId})` : ""} - ${success ? "SUCCESS" : "FAILED"}`;
       
       if (success) {
-        console.log(logMessage);
+        console.log("%s", logMessage);
       } else {
-        console.error(logMessage, error);
+        console.error("%s %s", logMessage, error ?? "");
       }
 
       // Additional security alerting for critical actions
@@ -58,7 +58,7 @@ class AuditLogger {
     } catch (auditError) {
       console.error("Failed to write audit log:", auditError);
       // Still log to console even if database fails
-      console.error(`AUDIT FAILURE: ${action} by ${userId} on ${resource} - ${success ? "SUCCESS" : "FAILED"}`);
+      console.error("%s", `AUDIT FAILURE: ${action} by ${userId} on ${resource} - ${success ? "SUCCESS" : "FAILED"}`);
     }
   }
 
