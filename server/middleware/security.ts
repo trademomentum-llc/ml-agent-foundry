@@ -71,11 +71,17 @@ export const sanitizeInput = (req: Request, res: Response, next: NextFunction) =
   // Recursively sanitize object properties
   const sanitizeObject = (obj: any): any => {
     if (typeof obj === "string") {
-      // Basic HTML/script tag removal
-      return obj.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
-                .replace(/<[^>]*>/g, "")
-                .trim();
-    }
+            // Safely encode HTML special characters to prevent XSS injection
+            // Using character encoding rather than regex stripping (avoids incomplete sanitization)
+            return obj
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;")
+              .replace(/'/g, "&#x27;")
+              .replace(/\//g, "&#x2F;")
+              .trim();
+      
     
     if (Array.isArray(obj)) {
       return obj.map(sanitizeObject);
