@@ -794,7 +794,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // NVIDIA Data Flywheel API Routes
   
   // Get flywheel runs
-  app.get("/api/flywheel/runs", isAuthenticated, async (req: any, res) => {
+  app.get("/api/flywheel/runs", isAuthenticated, rateLimiter, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       await auditLogger.log(userId, "flywheel.runs.view", "flywheel", null, req);
