@@ -780,7 +780,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/foundation-model/workflow", isAuthenticated, async (req: any, res) => {
+  app.post("/api/foundation-model/workflow", isAuthenticated, rateLimiter, async (req: any, res) => {
     try {
       const { description } = req.body;
       const workflow = await foundationModel.createWorkflow(description);
