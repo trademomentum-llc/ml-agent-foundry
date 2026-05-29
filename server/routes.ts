@@ -758,7 +758,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Foundation Model API routes  
-  app.post("/api/foundation-model/reasoning", isAuthenticated, async (req: any, res) => {
+  app.post("/api/foundation-model/reasoning", isAuthenticated, rateLimiter, async (req: any, res) => {
     try {
       const { query, context } = req.body;
       const reasoning = await foundationModel.executeReasoning(query, context);
