@@ -126,7 +126,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Agents routes for library
-  app.get("/api/agents", isAuthenticated, async (req: any, res) => {
+  app.get("/api/agents", rateLimiter, isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       await auditLogger.log(userId, "agents.list.view", "agents", null, req);
