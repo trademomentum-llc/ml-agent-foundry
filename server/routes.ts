@@ -740,7 +740,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const data = JSON.parse(message.toString());
         // Do not log raw WS payload (CodeQL js/log-injection).
-        console.log("Received WebSocket message type=%s", sanitizeForLog(data?.type, 64));
+        console.log("Received WebSocket message len=%s", String(message.toString().length));
         
         // Handle different message types
         switch (data.type) {
@@ -751,7 +751,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Handle subscription to updates
             break;
           default:
-            console.log("Unknown WebSocket message type=%s", sanitizeForLog(data?.type, 64));
+            console.log("Unknown WebSocket message");
         }
       } catch (error) {
         console.error("Error handling WebSocket message:", error);

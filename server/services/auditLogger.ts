@@ -1,7 +1,6 @@
 import { InsertAuditLog } from "@shared/schema";
 import { storage } from "../storage";
 import { Request } from "express";
-import { sanitizeForLog } from "../utils/logSanitize";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -39,19 +38,34 @@ class AuditLogger {
 
       await storage.createAuditLog(auditEntry);
 
-      // Log to console for immediate visibility — sanitize all external fields; constant formats only.
-      const logLevel = success ? "INFO" : "ERROR";
-      const safeUser = sanitizeForLog(userId || "system", 128);
-      const safeAction = sanitizeForLog(action, 128);
-      const safeResource = sanitizeForLog(resource, 128);
-      const safeResourceId = resourceId ? sanitizeForLog(resourceId, 128) : "";
-      const safeError = error ? sanitizeForLog(error, 300) : "";
+      // Console sink: never pass external/user strings (CodeQL js/log-injection).
+      // Persist full detail via storage.createAuditLog above; log lengths/outcome only.
       const outcome = success ? "SUCCESS" : "FAILED";
-      
+      const actionLen = typeof action === "string" ? action.length : 0;
+      const userLen = userId ? userId.length : 0;
+      const resourceLen = typeof resource === "string" ? resource.length : 0;
+      const resourceIdLen = resourceId ? resourceId.length : 0;
+      const errorLen = error ? error.length : 0;
+
       if (success) {
-        console.log("[%s] %s - %s on %s%s - %s", logLevel, safeUser, safeAction, safeResource, safeResourceId ? ` (${safeResourceId})` : "", outcome);
+        console.log(
+          "Audit event recorded outcome=%s actionLen=%s userLen=%s resourceLen=%s resourceIdLen=%s",
+          outcome,
+          String(actionLen),
+          String(userLen),
+          String(resourceLen),
+          String(resourceIdLen),
+        );
       } else {
-        console.error("[%s] %s - %s on %s%s - %s %s", logLevel, safeUser, safeAction, safeResource, safeResourceId ? ` (${safeResourceId})` : "", outcome, safeError);
+        console.error(
+          "Audit event recorded outcome=%s actionLen=%s userLen=%s resourceLen=%s resourceIdLen=%s errorLen=%s",
+          outcome,
+          String(actionLen),
+          String(userLen),
+          String(resourceLen),
+          String(resourceIdLen),
+          String(errorLen),
+        );
       }
 
       // Additional security alerting for critical actions
@@ -60,9 +74,15 @@ class AuditLogger {
       }
 
     } catch (auditError) {
-      console.error("Failed to write audit log:", auditError);
-      // Still log to console even if database fails — constant format, sanitized args.
-      console.error("AUDIT FAILURE: %s by %s on %s - %s", sanitizeForLog(action, 128), sanitizeForLog(userId, 128), sanitizeForLog(resource, 128), success ? "SUCCESS" : "FAILED");
+      console.error("Failed to write audit log");
+      // No external strings in the sink — lengths/outcome only.
+      console.error(
+        "AUDIT FAILURE outcome=%s actionLen=%s userLen=%s resourceLen=%s",
+        success ? "SUCCESS" : "FAILED",
+        String(typeof action === "string" ? action.length : 0),
+        String(userId ? userId.length : 0),
+        String(typeof resource === "string" ? resource.length : 0),
+      );
     }
   }
 
@@ -93,11 +113,22 @@ class AuditLogger {
       }
     );
 
-    // Immediate console output for security events — constant format, sanitized args.
+    // Immediate console output — severity enum is local; never log eventType/description strings.
+    const sev = severity.toUpperCase();
     if (severity === "critical" || severity === "high") {
-      console.error("[SECURITY:%s] %s - %s", sanitizeForLog(severity.toUpperCase(), 16), sanitizeForLog(eventType, 128), sanitizeForLog(description, 300));
+      console.error(
+        "SECURITY event severity=%s eventTypeLen=%s descriptionLen=%s",
+        sev,
+        String(eventType.length),
+        String(description.length),
+      );
     } else {
-      console.warn("[SECURITY:%s] %s - %s", sanitizeForLog(severity.toUpperCase(), 16), sanitizeForLog(eventType, 128), sanitizeForLog(description, 300));
+      console.warn(
+        "SECURITY event severity=%s eventTypeLen=%s descriptionLen=%s",
+        sev,
+        String(eventType.length),
+        String(description.length),
+      );
     }
   }
 
@@ -294,10 +325,10 @@ class AuditLogger {
     // 4. Create incident tickets
 
     console.error(
-      "SECURITY ALERT: CRITICAL SECURITY EVENT: %s on %s by %s",
-      sanitizeForLog(auditEntry.action, 128),
-      sanitizeForLog(auditEntry.resource, 128),
-      sanitizeForLog(auditEntry.userId, 128),
+      "SECURITY ALERT: critical audit event actionLen=%s resourceLen=%s userLen=%s",
+      String(auditEntry.action ? auditEntry.action.length : 0),
+      String(auditEntry.resource ? auditEntry.resource.length : 0),
+      String(auditEntry.userId ? auditEntry.userId.length : 0),
     );
     
     // Here you would integrate with:
@@ -306,13 +337,13 @@ class AuditLogger {
     // - External SIEM systems
     // - Incident management tools
     
-    // For now, we'll just ensure it's logged prominently (no raw external blobs).
+    // Lengths only — do not log error/metadata contents to console.
     if (auditEntry.error) {
-      console.error("Error details: %s", sanitizeForLog(auditEntry.error, 300));
+      console.error("Critical event has error detailLen=%s", String(auditEntry.error.length));
     }
     
     if (auditEntry.metadata) {
-      console.error("Additional context keys=%s", sanitizeForLog(Object.keys(auditEntry.metadata).join(","), 200));
+      console.error("Critical event metadataKeyCount=%s", String(Object.keys(auditEntry.metadata).length));
     }
   }
 }

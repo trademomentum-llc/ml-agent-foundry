@@ -7,11 +7,6 @@ interface WebSocketMessage {
 }
 
 
-function sanitizeForLog(value: unknown, maxLen = 120): string {
-  if (value == null) return "";
-  const raw = typeof value === "string" ? value : String(value);
-  return raw.replace(/[\u0000-\u001F\u007F\u2028\u2029]/g, "").slice(0, maxLen);
-}
 
 export function useWebSocket() {
   const [isConnected, setIsConnected] = useState(false);
@@ -63,8 +58,8 @@ export function useWebSocket() {
       wsRef.current.onmessage = (event) => {
         try {
           const message: WebSocketMessage = JSON.parse(event.data);
-          // Do not log raw payload (CodeQL js/log-injection); type only, sanitized.
-          console.log("WebSocket message received type=%s len=%s", sanitizeForLog(message?.type, 64), String(typeof event.data === "string" ? event.data.length : 0));
+          // Length only — never log message type/payload (CodeQL js/log-injection).
+          console.log("WebSocket message received len=%s", String(typeof event.data === "string" ? event.data.length : 0));
           
           // Handle different message types
           switch (message.type) {
@@ -111,7 +106,7 @@ export function useWebSocket() {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message));
     } else {
-      console.warn("WebSocket is not connected. Cannot send message type=%s", sanitizeForLog(message?.type, 64));
+      console.warn("WebSocket is not connected; cannot send message");
     }
   };
 

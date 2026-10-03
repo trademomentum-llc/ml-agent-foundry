@@ -847,18 +847,6 @@ var init_openai = __esm({
   }
 });
 
-// server/utils/logSanitize.ts
-function sanitizeForLog(value, maxLen = 200) {
-  if (value == null) return "";
-  const raw = typeof value === "string" ? value : String(value);
-  return raw.replace(/[\u0000-\u001F\u007F\u2028\u2029]/g, "").slice(0, maxLen);
-}
-var init_logSanitize = __esm({
-  "server/utils/logSanitize.ts"() {
-    "use strict";
-  }
-});
-
 // server/services/auditLogger.ts
 function isRecord(value) {
   return typeof value === "object" && value !== null;
@@ -873,7 +861,6 @@ var init_auditLogger = __esm({
   "server/services/auditLogger.ts"() {
     "use strict";
     init_storage();
-    init_logSanitize();
     AuditLogger = class {
       async log(userId, action, resource, resourceId, req, success = true, error, metadata) {
         try {
@@ -889,24 +876,44 @@ var init_auditLogger = __esm({
             metadata
           };
           await storage.createAuditLog(auditEntry);
-          const logLevel = success ? "INFO" : "ERROR";
-          const safeUser = sanitizeForLog(userId || "system", 128);
-          const safeAction = sanitizeForLog(action, 128);
-          const safeResource = sanitizeForLog(resource, 128);
-          const safeResourceId = resourceId ? sanitizeForLog(resourceId, 128) : "";
-          const safeError = error ? sanitizeForLog(error, 300) : "";
           const outcome = success ? "SUCCESS" : "FAILED";
+          const actionLen = typeof action === "string" ? action.length : 0;
+          const userLen = userId ? userId.length : 0;
+          const resourceLen = typeof resource === "string" ? resource.length : 0;
+          const resourceIdLen = resourceId ? resourceId.length : 0;
+          const errorLen = error ? error.length : 0;
           if (success) {
-            console.log("[%s] %s - %s on %s%s - %s", logLevel, safeUser, safeAction, safeResource, safeResourceId ? ` (${safeResourceId})` : "", outcome);
+            console.log(
+              "Audit event recorded outcome=%s actionLen=%s userLen=%s resourceLen=%s resourceIdLen=%s",
+              outcome,
+              String(actionLen),
+              String(userLen),
+              String(resourceLen),
+              String(resourceIdLen)
+            );
           } else {
-            console.error("[%s] %s - %s on %s%s - %s %s", logLevel, safeUser, safeAction, safeResource, safeResourceId ? ` (${safeResourceId})` : "", outcome, safeError);
+            console.error(
+              "Audit event recorded outcome=%s actionLen=%s userLen=%s resourceLen=%s resourceIdLen=%s errorLen=%s",
+              outcome,
+              String(actionLen),
+              String(userLen),
+              String(resourceLen),
+              String(resourceIdLen),
+              String(errorLen)
+            );
           }
           if (this.isCriticalAction(action) || !success) {
             await this.handleCriticalEvent(auditEntry);
           }
         } catch (auditError) {
-          console.error("Failed to write audit log:", auditError);
-          console.error("AUDIT FAILURE: %s by %s on %s - %s", sanitizeForLog(action, 128), sanitizeForLog(userId, 128), sanitizeForLog(resource, 128), success ? "SUCCESS" : "FAILED");
+          console.error("Failed to write audit log");
+          console.error(
+            "AUDIT FAILURE outcome=%s actionLen=%s userLen=%s resourceLen=%s",
+            success ? "SUCCESS" : "FAILED",
+            String(typeof action === "string" ? action.length : 0),
+            String(userId ? userId.length : 0),
+            String(typeof resource === "string" ? resource.length : 0)
+          );
         }
       }
       async logSecurityEvent(userId, eventType, severity, description, req, metadata) {
@@ -927,10 +934,21 @@ var init_auditLogger = __esm({
             description
           }
         );
+        const sev = severity.toUpperCase();
         if (severity === "critical" || severity === "high") {
-          console.error("[SECURITY:%s] %s - %s", sanitizeForLog(severity.toUpperCase(), 16), sanitizeForLog(eventType, 128), sanitizeForLog(description, 300));
+          console.error(
+            "SECURITY event severity=%s eventTypeLen=%s descriptionLen=%s",
+            sev,
+            String(eventType.length),
+            String(description.length)
+          );
         } else {
-          console.warn("[SECURITY:%s] %s - %s", sanitizeForLog(severity.toUpperCase(), 16), sanitizeForLog(eventType, 128), sanitizeForLog(description, 300));
+          console.warn(
+            "SECURITY event severity=%s eventTypeLen=%s descriptionLen=%s",
+            sev,
+            String(eventType.length),
+            String(description.length)
+          );
         }
       }
       async logAuthEvent(userId, eventType, req, metadata) {
@@ -1054,16 +1072,16 @@ var init_auditLogger = __esm({
       }
       async handleCriticalEvent(auditEntry) {
         console.error(
-          "SECURITY ALERT: CRITICAL SECURITY EVENT: %s on %s by %s",
-          sanitizeForLog(auditEntry.action, 128),
-          sanitizeForLog(auditEntry.resource, 128),
-          sanitizeForLog(auditEntry.userId, 128)
+          "SECURITY ALERT: critical audit event actionLen=%s resourceLen=%s userLen=%s",
+          String(auditEntry.action ? auditEntry.action.length : 0),
+          String(auditEntry.resource ? auditEntry.resource.length : 0),
+          String(auditEntry.userId ? auditEntry.userId.length : 0)
         );
         if (auditEntry.error) {
-          console.error("Error details: %s", sanitizeForLog(auditEntry.error, 300));
+          console.error("Critical event has error detailLen=%s", String(auditEntry.error.length));
         }
         if (auditEntry.metadata) {
-          console.error("Additional context keys=%s", sanitizeForLog(Object.keys(auditEntry.metadata).join(","), 200));
+          console.error("Critical event metadataKeyCount=%s", String(Object.keys(auditEntry.metadata).length));
         }
       }
     };
@@ -2644,7 +2662,15 @@ var foundationModel = new BERTFoundationModel();
 
 // server/routes.ts
 init_schema();
-init_logSanitize();
+
+// server/utils/logSanitize.ts
+function sanitizeForLog(value, maxLen = 200) {
+  if (value == null) return "";
+  const raw = typeof value === "string" ? value : String(value);
+  return raw.replace(/[\u0000-\u001F\u007F\u2028\u2029]/g, "").slice(0, maxLen);
+}
+
+// server/routes.ts
 async function registerRoutes(app2) {
   app2.use(securityMiddleware);
   await setupAuth(app2);
@@ -3228,7 +3254,7 @@ async function registerRoutes(app2) {
     ws2.on("message", (message) => {
       try {
         const data = JSON.parse(message.toString());
-        console.log("Received WebSocket message type=%s", sanitizeForLog(data?.type, 64));
+        console.log("Received WebSocket message len=%s", String(message.toString().length));
         switch (data.type) {
           case "ping":
             ws2.send(JSON.stringify({ type: "pong" }));
@@ -3236,7 +3262,7 @@ async function registerRoutes(app2) {
           case "subscribe":
             break;
           default:
-            console.log("Unknown WebSocket message type=%s", sanitizeForLog(data?.type, 64));
+            console.log("Unknown WebSocket message");
         }
       } catch (error) {
         console.error("Error handling WebSocket message:", error);
@@ -3468,7 +3494,6 @@ var vite_config_default = defineConfig({
 });
 
 // server/vite.ts
-init_logSanitize();
 import { nanoid } from "nanoid";
 import rateLimit4 from "express-rate-limit";
 var viteLogger = createLogger();
@@ -3479,7 +3504,9 @@ function log(message, source = "express") {
     second: "2-digit",
     hour12: true
   });
-  console.log("%s [%s] %s", formattedTime, sanitizeForLog(source, 40), sanitizeForLog(message, 500));
+  const srcLen = typeof source === "string" ? source.length : 0;
+  const msgLen = typeof message === "string" ? message.length : 0;
+  console.log("%s sourceLen=%s messageLen=%s", formattedTime, String(srcLen), String(msgLen));
 }
 async function setupVite(app2, server) {
   const serverOptions = {
