@@ -848,6 +848,14 @@ var init_openai = __esm({
 });
 
 // server/services/auditLogger.ts
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
+}
+function metadataString(metadata, key) {
+  if (!isRecord(metadata)) return void 0;
+  const value = metadata[key];
+  return typeof value === "string" ? value : void 0;
+}
 var AuditLogger, auditLogger;
 var init_auditLogger = __esm({
   "server/services/auditLogger.ts"() {
@@ -868,19 +876,17 @@ var init_auditLogger = __esm({
             metadata
           };
           await storage.createAuditLog(auditEntry);
-          const logLevel = success ? "INFO" : "ERROR";
-          const logMessage = `[${logLevel}] ${userId || "system"} - ${action} on ${resource}${resourceId ? ` (${resourceId})` : ""} - ${success ? "SUCCESS" : "FAILED"}`;
           if (success) {
-            console.log(logMessage);
+            console.log("Audit event recorded: success");
           } else {
-            console.error(logMessage, error);
+            console.error("Audit event recorded: failure");
           }
           if (this.isCriticalAction(action) || !success) {
             await this.handleCriticalEvent(auditEntry);
           }
         } catch (auditError) {
-          console.error("Failed to write audit log:", auditError);
-          console.error(`AUDIT FAILURE: ${action} by ${userId} on ${resource} - ${success ? "SUCCESS" : "FAILED"}`);
+          console.error("Failed to write audit log");
+          console.error("AUDIT FAILURE");
         }
       }
       async logSecurityEvent(userId, eventType, severity, description, req, metadata) {
@@ -901,11 +907,10 @@ var init_auditLogger = __esm({
             description
           }
         );
-        const logMessage = `[SECURITY:${severity.toUpperCase()}] ${eventType} - ${description}`;
         if (severity === "critical" || severity === "high") {
-          console.error(logMessage);
+          console.error("SECURITY event recorded: high");
         } else {
-          console.warn(logMessage);
+          console.warn("SECURITY event recorded: low");
         }
       }
       async logAuthEvent(userId, eventType, req, metadata) {
@@ -956,12 +961,12 @@ var init_auditLogger = __esm({
       async getSecurityAlerts(userId, timeRange, severity) {
         const auditLogs = await storage.getAuditLogs(userId, 100);
         return auditLogs.filter(
-          (log2) => log2.action.startsWith("security.") && log2.createdAt >= timeRange.from && log2.createdAt <= timeRange.to && (!severity || log2.metadata?.severity === severity)
+          (log2) => log2.action.startsWith("security.") && log2.createdAt != null && log2.createdAt >= timeRange.from && log2.createdAt <= timeRange.to && (!severity || metadataString(log2.metadata, "severity") === severity)
         ).map((log2) => ({
           id: log2.id,
           action: log2.action,
-          severity: log2.metadata?.severity || "medium",
-          description: log2.metadata?.description || log2.action,
+          severity: metadataString(log2.metadata, "severity") || "medium",
+          description: metadataString(log2.metadata, "description") || log2.action,
           timestamp: log2.createdAt,
           userId: log2.userId,
           ipAddress: log2.ipAddress,
@@ -971,7 +976,7 @@ var init_auditLogger = __esm({
       async generateSecurityReport(userId, timeRange) {
         const auditLogs = await storage.getAuditLogs(userId, 1e3);
         const filteredLogs = auditLogs.filter(
-          (log2) => log2.createdAt >= timeRange.from && log2.createdAt <= timeRange.to
+          (log2) => log2.createdAt != null && log2.createdAt >= timeRange.from && log2.createdAt <= timeRange.to
         );
         const securityEvents = filteredLogs.filter(
           (log2) => log2.action.startsWith("security.") || log2.action.startsWith("auth.")
@@ -980,7 +985,7 @@ var init_auditLogger = __esm({
           (log2) => log2.action === "auth.login_failure"
         );
         const criticalEvents = filteredLogs.filter(
-          (log2) => log2.metadata?.severity === "critical" || !log2.success
+          (log2) => metadataString(log2.metadata, "severity") === "critical" || !log2.success
         );
         const actionCounts = /* @__PURE__ */ new Map();
         filteredLogs.forEach((log2) => {
@@ -1028,13 +1033,12 @@ var init_auditLogger = __esm({
         return sensitiveResources.some((sensitive) => resource.includes(sensitive));
       }
       async handleCriticalEvent(auditEntry) {
-        const alertMessage = `CRITICAL SECURITY EVENT: ${auditEntry.action} on ${auditEntry.resource} by ${auditEntry.userId}`;
-        console.error("\u{1F6A8} SECURITY ALERT:", alertMessage);
+        console.error("SECURITY ALERT: critical audit event");
         if (auditEntry.error) {
-          console.error("Error details:", auditEntry.error);
+          console.error("Critical event includes error detail");
         }
         if (auditEntry.metadata) {
-          console.error("Additional context:", auditEntry.metadata);
+          console.error("Critical event includes metadata");
         }
       }
     };
@@ -1136,6 +1140,9 @@ var init_nationalReserve = __esm({
           userId,
           "national_reserve.deploy",
           "agent_system",
+          null,
+          null,
+          true,
           null,
           { deployedCount: deployedAgents.length }
         );
@@ -1290,6 +1297,9 @@ var init_nationalReserve = __esm({
           "conversation.analyze",
           "communication",
           null,
+          null,
+          true,
+          null,
           {
             context,
             analysisResults: patternAnalysis,
@@ -1414,131 +1424,12 @@ import passport from "passport";
 import session from "express-session";
 import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
-if (!process.env.REPLIT_DOMAINS) {
-  throw new Error("Environment variable REPLIT_DOMAINS not provided");
-}
-var getOidcConfig = memoize(
-  async () => {
-    return await client.discovery(
-      new URL(process.env.ISSUER_URL ?? "https://replit.com/oidc"),
-      process.env.REPL_ID
-    );
-  },
-  { maxAge: 3600 * 1e3 }
-);
-function getSession() {
-  const sessionTtl = 7 * 24 * 60 * 60 * 1e3;
-  const pgStore = connectPg(session);
-  const sessionStore = new pgStore({
-    conString: process.env.DATABASE_URL,
-    createTableIfMissing: false,
-    ttl: sessionTtl,
-    tableName: "sessions"
-  });
-  return session({
-    secret: process.env.SESSION_SECRET,
-    store: sessionStore,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure: true,
-      maxAge: sessionTtl
-    }
-  });
-}
-function updateUserSession(user, tokens) {
-  user.claims = tokens.claims();
-  user.access_token = tokens.access_token;
-  user.refresh_token = tokens.refresh_token;
-  user.expires_at = user.claims?.exp;
-}
-async function upsertUser(claims) {
-  await storage.upsertUser({
-    id: claims["sub"],
-    email: claims["email"],
-    firstName: claims["first_name"],
-    lastName: claims["last_name"],
-    profileImageUrl: claims["profile_image_url"]
-  });
-}
-async function setupAuth(app2) {
-  app2.set("trust proxy", 1);
-  app2.use(getSession());
-  app2.use(passport.initialize());
-  app2.use(passport.session());
-  const config = await getOidcConfig();
-  const verify = async (tokens, verified) => {
-    const user = {};
-    updateUserSession(user, tokens);
-    await upsertUser(tokens.claims());
-    verified(null, user);
-  };
-  for (const domain of process.env.REPLIT_DOMAINS.split(",")) {
-    const strategy = new Strategy(
-      {
-        name: `replitauth:${domain}`,
-        config,
-        scope: "openid email profile offline_access",
-        callbackURL: `https://${domain}/api/callback`
-      },
-      verify
-    );
-    passport.use(strategy);
-  }
-  passport.serializeUser((user, cb) => cb(null, user));
-  passport.deserializeUser((user, cb) => cb(null, user));
-  app2.get("/api/login", (req, res, next) => {
-    passport.authenticate(`replitauth:${req.hostname}`, {
-      prompt: "login consent",
-      scope: ["openid", "email", "profile", "offline_access"]
-    })(req, res, next);
-  });
-  app2.get("/api/callback", (req, res, next) => {
-    passport.authenticate(`replitauth:${req.hostname}`, {
-      successReturnToOrRedirect: "/",
-      failureRedirect: "/api/login"
-    })(req, res, next);
-  });
-  app2.get("/api/logout", (req, res) => {
-    req.logout(() => {
-      res.redirect(
-        client.buildEndSessionUrl(config, {
-          client_id: process.env.REPL_ID,
-          post_logout_redirect_uri: `${req.protocol}://${req.hostname}`
-        }).href
-      );
-    });
-  });
-}
-var isAuthenticated = async (req, res, next) => {
-  const user = req.user;
-  if (!req.isAuthenticated() || !user.expires_at) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
-  const now = Math.floor(Date.now() / 1e3);
-  if (now <= user.expires_at) {
-    return next();
-  }
-  const refreshToken = user.refresh_token;
-  if (!refreshToken) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
-  }
-  try {
-    const config = await getOidcConfig();
-    const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
-    updateUserSession(user, tokenResponse);
-    return next();
-  } catch (error) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
-  }
-};
+import rateLimit2 from "express-rate-limit";
 
 // server/middleware/security.ts
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import crypto from "crypto";
 var securityMiddleware = helmet({
   contentSecurityPolicy: {
     directives: {
@@ -1584,6 +1475,180 @@ var strictRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+var csrfProtection = (req, res, next) => {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+    return next();
+  }
+  const headerToken = req.get("x-csrf-token");
+  const bodyToken = typeof req.body?._csrf === "string" ? req.body._csrf : void 0;
+  const provided = headerToken || bodyToken;
+  const sessionToken = req.session?.csrfToken;
+  if (!provided || !sessionToken || provided !== sessionToken) {
+    return res.status(403).json({ message: "Invalid or missing CSRF token" });
+  }
+  next();
+};
+var ensureCsrfToken = (req, res, next) => {
+  if (!req.session) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  let sessionToken = req.session.csrfToken;
+  if (typeof sessionToken !== "string" || sessionToken.length < 32) {
+    sessionToken = crypto.randomBytes(32).toString("hex");
+    req.session.csrfToken = sessionToken;
+  }
+  res.cookie("csrf-token", sessionToken, {
+    httpOnly: false,
+    secure: true,
+    sameSite: "strict",
+    path: "/"
+  });
+  res.setHeader("X-CSRF-Token", sessionToken);
+  next();
+};
+
+// server/replitAuth.ts
+if (!process.env.REPLIT_DOMAINS) {
+  throw new Error("Environment variable REPLIT_DOMAINS not provided");
+}
+var getOidcConfig = memoize(
+  async () => {
+    return await client.discovery(
+      new URL(process.env.ISSUER_URL ?? "https://replit.com/oidc"),
+      process.env.REPL_ID
+    );
+  },
+  { maxAge: 3600 * 1e3 }
+);
+function getSession() {
+  const sessionTtl = 7 * 24 * 60 * 60 * 1e3;
+  const pgStore = connectPg(session);
+  const sessionStore = new pgStore({
+    conString: process.env.DATABASE_URL,
+    createTableIfMissing: false,
+    ttl: sessionTtl,
+    tableName: "sessions"
+  });
+  return session({
+    secret: process.env.SESSION_SECRET,
+    store: sessionStore,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: true,
+      maxAge: sessionTtl,
+      sameSite: "strict"
+      // CSRF protection: strict same-site cookies
+    }
+  });
+}
+function updateUserSession(user, tokens) {
+  user.claims = tokens.claims();
+  user.access_token = tokens.access_token;
+  user.refresh_token = tokens.refresh_token;
+  user.expires_at = user.claims?.exp;
+}
+async function upsertUser(claims) {
+  await storage.upsertUser({
+    id: claims["sub"],
+    email: claims["email"],
+    firstName: claims["first_name"],
+    lastName: claims["last_name"],
+    profileImageUrl: claims["profile_image_url"]
+  });
+}
+async function setupAuth(app2) {
+  app2.set("trust proxy", 1);
+  app2.use(getSession());
+  app2.use(passport.initialize());
+  app2.use(passport.session());
+  app2.use(ensureCsrfToken);
+  app2.use(csrfProtection);
+  const config = await getOidcConfig();
+  const verify = async (tokens, verified) => {
+    const user = {};
+    updateUserSession(user, tokens);
+    await upsertUser(tokens.claims());
+    verified(null, user);
+  };
+  for (const domain of process.env.REPLIT_DOMAINS.split(",")) {
+    const strategy = new Strategy(
+      {
+        name: `replitauth:${domain}`,
+        config,
+        scope: "openid email profile offline_access",
+        callbackURL: `https://${domain}/api/callback`
+      },
+      verify
+    );
+    passport.use(strategy);
+  }
+  passport.serializeUser((user, cb) => cb(null, user));
+  passport.deserializeUser((user, cb) => cb(null, user));
+  const authLimiter = rateLimit2({
+    windowMs: 15 * 60 * 1e3,
+    max: 20,
+    message: { error: "Too many auth requests, please try again later." }
+  });
+  app2.get("/api/login", authLimiter, (req, res, next) => {
+    passport.authenticate(`replitauth:${req.hostname}`, {
+      prompt: "login consent",
+      scope: ["openid", "email", "profile", "offline_access"]
+    })(req, res, next);
+  });
+  app2.get("/api/callback", authLimiter, (req, res, next) => {
+    passport.authenticate(`replitauth:${req.hostname}`, {
+      successReturnToOrRedirect: "/",
+      failureRedirect: "/api/login"
+    })(req, res, next);
+  });
+  app2.get("/api/logout", (req, res) => {
+    req.logout(() => {
+      res.redirect(
+        client.buildEndSessionUrl(config, {
+          client_id: process.env.REPL_ID,
+          post_logout_redirect_uri: `${req.protocol}://${req.hostname}`
+        }).href
+      );
+    });
+  });
+}
+function isUsableToken(token) {
+  return typeof token === "string" && token.length >= 16 && token.length <= 8192 && !/\s/.test(token);
+}
+var isAuthenticated = async (req, res, next) => {
+  const user = req.user;
+  if (!req.isAuthenticated() || !user || !isUsableToken(user.access_token)) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const expiresAt = user.expires_at;
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const now = Math.floor(Date.now() / 1e3);
+  if (now <= expiresAt) {
+    return next();
+  }
+  const refreshToken = user.refresh_token;
+  if (!isUsableToken(refreshToken)) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  try {
+    const config = await getOidcConfig();
+    const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
+    updateUserSession(user, tokenResponse);
+    if (!isUsableToken(user.access_token) || typeof user.expires_at !== "number" || !Number.isFinite(user.expires_at)) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    return next();
+  } catch {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+};
+
+// server/routes.ts
+import rateLimit3 from "express-rate-limit";
 
 // server/middleware/validation.ts
 import { ZodError } from "zod";
@@ -1614,6 +1679,15 @@ var validateRequest = (schema) => {
 init_storage();
 init_openai();
 init_auditLogger();
+function isRecord2(value) {
+  return typeof value === "object" && value !== null;
+}
+function securityFlag(config, key) {
+  return isRecord2(config) && config[key] === true;
+}
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
 var AgentFactory = class {
   agentCapabilities = /* @__PURE__ */ new Map();
   constructor() {
@@ -1753,7 +1827,7 @@ var AgentFactory = class {
         agent.id.toString(),
         null,
         false,
-        error.message
+        errorMessage(error)
       );
       throw error;
     }
@@ -1792,7 +1866,7 @@ var AgentFactory = class {
         null,
         null,
         false,
-        error.message,
+        errorMessage(error),
         { agentId, taskType, parameters }
       );
       await storage.createActivity({
@@ -1800,7 +1874,7 @@ var AgentFactory = class {
         agentId: agent.id,
         type: "task.failed",
         message: `Agent "${agent.name}" failed to complete task: ${taskType}`,
-        metadata: { taskType, parameters, error: error.message }
+        metadata: { taskType, parameters, error: errorMessage(error) }
       });
       throw error;
     }
@@ -1833,7 +1907,7 @@ var AgentFactory = class {
           keywords: parameters.keywords
         };
         const contentResult = await openaiService.generateContent(contentRequest);
-        if (agent.securityConfig?.approvalRequired) {
+        if (securityFlag(agent.securityConfig, "approvalRequired")) {
           await storage.createApproval({
             agentId: agent.id,
             userId: agent.userId,
@@ -1881,7 +1955,7 @@ var AgentFactory = class {
     switch (taskType) {
       case "create_campaign":
         const campaignId = `campaign_${Date.now()}`;
-        if (agent.securityConfig?.approvalRequired) {
+        if (securityFlag(agent.securityConfig, "approvalRequired")) {
           await storage.createApproval({
             agentId: agent.id,
             userId: agent.userId,
@@ -2034,11 +2108,11 @@ var AgentFactory = class {
       issues.push("No security configuration found");
       recommendations.push("Configure security settings for the agent");
     }
-    if (!agent.securityConfig?.encryption) {
+    if (!securityFlag(agent.securityConfig, "encryption")) {
       issues.push("Encryption not enabled");
       recommendations.push("Enable encryption for sensitive data");
     }
-    if (!agent.securityConfig?.approvalRequired) {
+    if (!securityFlag(agent.securityConfig, "approvalRequired")) {
       recommendations.push("Consider enabling approval requirements for high-risk actions");
     }
     return {
@@ -2071,8 +2145,7 @@ var TaskQueue = class {
       maxRetries: 3
     };
     await storage.updateTask(task.id, {
-      status: "pending",
-      updatedAt: /* @__PURE__ */ new Date()
+      status: "pending"
     });
     if (priority === "high") {
       this.queue.unshift(queuedTask);
@@ -2118,8 +2191,7 @@ var TaskQueue = class {
     try {
       await storage.updateTask(task.id, {
         status: "processing",
-        startedAt: /* @__PURE__ */ new Date(),
-        updatedAt: /* @__PURE__ */ new Date()
+        startedAt: /* @__PURE__ */ new Date()
       });
       await auditLogger.log(
         task.userId,
@@ -2134,8 +2206,7 @@ var TaskQueue = class {
       let result;
       if (task.scheduledFor && new Date(task.scheduledFor) > /* @__PURE__ */ new Date()) {
         await storage.updateTask(task.id, {
-          status: "pending",
-          updatedAt: /* @__PURE__ */ new Date()
+          status: "pending"
         });
         setTimeout(() => {
           this.queue.push(task);
@@ -2154,8 +2225,7 @@ var TaskQueue = class {
       await storage.updateTask(task.id, {
         status: "completed",
         result,
-        completedAt: /* @__PURE__ */ new Date(),
-        updatedAt: /* @__PURE__ */ new Date()
+        completedAt: /* @__PURE__ */ new Date()
       });
       await storage.createActivity({
         userId: task.userId,
@@ -2549,10 +2619,28 @@ var foundationModel = new BERTFoundationModel();
 
 // server/routes.ts
 init_schema();
+
+// server/utils/logSanitize.ts
+function sanitizeForLog(value, maxLen = 200) {
+  if (value == null) return "";
+  const raw = typeof value === "string" ? value : String(value);
+  return raw.replace(/[\u0000-\u001F\u007F\u2028\u2029]/g, "").slice(0, maxLen);
+}
+
+// server/routes.ts
 async function registerRoutes(app2) {
   app2.use(securityMiddleware);
   await setupAuth(app2);
-  app2.use("/api", rateLimiter);
+  app2.use(
+    "/api",
+    rateLimit3({
+      windowMs: 15 * 60 * 1e3,
+      max: 100,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: "Too many requests from this IP, please try again later." }
+    })
+  );
   app2.get("/api/auth/user", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -2627,7 +2715,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch security status" });
     }
   });
-  app2.get("/api/agents", isAuthenticated, async (req, res) => {
+  app2.get("/api/agents", rateLimiter, isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       await auditLogger.log(userId, "agents.list.view", "agents", null, req);
@@ -2707,15 +2795,15 @@ async function registerRoutes(app2) {
       const userId = req.user.claims.sub;
       const agentId = req.params.id;
       const action = req.params.action;
-      await auditLogger.log(userId, `agent.${action}`, "agents", agentId, req);
+      await auditLogger.log(userId, `agent.${sanitizeForLog(action, 64)}`, "agents", sanitizeForLog(agentId, 64), req);
       res.json({
-        message: `Agent ${action} completed successfully`,
+        message: "Agent action completed successfully",
         agentId,
         action
       });
     } catch (error) {
-      console.error(`Error performing agent ${req.params.action}:`, error);
-      res.status(500).json({ message: `Failed to ${req.params.action} agent` });
+      console.error("Error performing agent action:", error);
+      res.status(500).json({ message: "Failed to perform agent action" });
     }
   });
   app2.get("/api/dashboard/activities", isAuthenticated, async (req, res) => {
@@ -3123,7 +3211,7 @@ async function registerRoutes(app2) {
     ws2.on("message", (message) => {
       try {
         const data = JSON.parse(message.toString());
-        console.log("Received WebSocket message:", data);
+        console.log("Received WebSocket message");
         switch (data.type) {
           case "ping":
             ws2.send(JSON.stringify({ type: "pong" }));
@@ -3131,7 +3219,7 @@ async function registerRoutes(app2) {
           case "subscribe":
             break;
           default:
-            console.log("Unknown message type:", data.type);
+            console.log("Unknown WebSocket message");
         }
       } catch (error) {
         console.error("Error handling WebSocket message:", error);
@@ -3147,7 +3235,7 @@ async function registerRoutes(app2) {
       ws2.send(JSON.stringify({ type: "connected", timestamp: Date.now() }));
     }
   });
-  app2.post("/api/foundation-model/reasoning", isAuthenticated, async (req, res) => {
+  app2.post("/api/foundation-model/reasoning", isAuthenticated, rateLimiter, async (req, res) => {
     try {
       const { query, context } = req.body;
       const reasoning = await foundationModel.executeReasoning(query, context);
@@ -3157,7 +3245,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to execute reasoning" });
     }
   });
-  app2.post("/api/foundation-model/intent-analysis", isAuthenticated, async (req, res) => {
+  app2.post("/api/foundation-model/intent-analysis", isAuthenticated, rateLimiter, async (req, res) => {
     try {
       const { text: text2 } = req.body;
       const analysis = await foundationModel.analyzeIntent(text2);
@@ -3167,7 +3255,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to analyze intent" });
     }
   });
-  app2.post("/api/foundation-model/workflow", isAuthenticated, async (req, res) => {
+  app2.post("/api/foundation-model/workflow", isAuthenticated, rateLimiter, async (req, res) => {
     try {
       const { description } = req.body;
       const workflow = await foundationModel.createWorkflow(description);
@@ -3177,7 +3265,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to create workflow" });
     }
   });
-  app2.get("/api/flywheel/runs", isAuthenticated, async (req, res) => {
+  app2.get("/api/flywheel/runs", isAuthenticated, rateLimiter, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       await auditLogger.log(userId, "flywheel.runs.view", "flywheel", null, req);
@@ -3216,7 +3304,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch flywheel runs" });
     }
   });
-  app2.post("/api/flywheel/runs", isAuthenticated, async (req, res) => {
+  app2.post("/api/flywheel/runs", rateLimiter, isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const { name, targetWorkload, description } = req.body;
@@ -3239,7 +3327,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to start flywheel run" });
     }
   });
-  app2.get("/api/flywheel/evaluations", isAuthenticated, async (req, res) => {
+  app2.get("/api/flywheel/evaluations", rateLimiter, isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       await auditLogger.log(userId, "flywheel.evaluations.view", "flywheel", null, req);
@@ -3273,7 +3361,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch evaluations" });
     }
   });
-  app2.get("/api/flywheel/optimizations", isAuthenticated, async (req, res) => {
+  app2.get("/api/flywheel/optimizations", rateLimiter, isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       await auditLogger.log(userId, "flywheel.optimizations.view", "flywheel", null, req);
@@ -3364,6 +3452,7 @@ var vite_config_default = defineConfig({
 
 // server/vite.ts
 import { nanoid } from "nanoid";
+import rateLimit4 from "express-rate-limit";
 var viteLogger = createLogger();
 function log(message, source = "express") {
   const formattedTime = (/* @__PURE__ */ new Date()).toLocaleTimeString("en-US", {
@@ -3372,7 +3461,7 @@ function log(message, source = "express") {
     second: "2-digit",
     hour12: true
   });
-  console.log(`${formattedTime} [${source}] ${message}`);
+  console.log("%s server log event", formattedTime);
 }
 async function setupVite(app2, server) {
   const serverOptions = {
@@ -3394,6 +3483,8 @@ async function setupVite(app2, server) {
     appType: "custom"
   });
   app2.use(vite.middlewares);
+  const staticLimiter = rateLimit4({ windowMs: 15 * 60 * 1e3, max: 300 });
+  app2.use(staticLimiter);
   app2.use("*", async (req, res, next) => {
     const url = req.originalUrl;
     try {
@@ -3423,6 +3514,8 @@ function serveStatic(app2) {
       `Could not find the build directory: ${distPath}, make sure to build the client first`
     );
   }
+  const fileLimiter = rateLimit4({ windowMs: 15 * 60 * 1e3, max: 500 });
+  app2.use(fileLimiter);
   app2.use(express.static(distPath));
   app2.use("*", (_req, res) => {
     res.sendFile(path2.resolve(distPath, "index.html"));

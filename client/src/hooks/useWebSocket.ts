@@ -6,6 +6,8 @@ interface WebSocketMessage {
   timestamp?: number;
 }
 
+
+
 export function useWebSocket() {
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected">("disconnected");
@@ -56,7 +58,8 @@ export function useWebSocket() {
       wsRef.current.onmessage = (event) => {
         try {
           const message: WebSocketMessage = JSON.parse(event.data);
-          console.log("WebSocket message received:", message);
+          // Static message only (CodeQL js/log-injection).
+          console.log("WebSocket message received");
           
           // Handle different message types
           switch (message.type) {
@@ -103,7 +106,7 @@ export function useWebSocket() {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message));
     } else {
-      console.warn("WebSocket is not connected. Cannot send message:", message);
+      console.warn("WebSocket is not connected; cannot send message");
     }
   };
 
