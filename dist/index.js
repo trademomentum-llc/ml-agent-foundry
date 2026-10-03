@@ -871,16 +871,16 @@ var init_auditLogger = __esm({
           const logLevel = success ? "INFO" : "ERROR";
           const logMessage = `[${logLevel}] ${userId || "system"} - ${action} on ${resource}${resourceId ? ` (${resourceId})` : ""} - ${success ? "SUCCESS" : "FAILED"}`;
           if (success) {
-            console.log(logMessage);
+            console.log("%s", logMessage);
           } else {
-            console.error(logMessage, error);
+            console.error("%s %s", logMessage, error ?? "");
           }
           if (this.isCriticalAction(action) || !success) {
             await this.handleCriticalEvent(auditEntry);
           }
         } catch (auditError) {
           console.error("Failed to write audit log:", auditError);
-          console.error(`AUDIT FAILURE: ${action} by ${userId} on ${resource} - ${success ? "SUCCESS" : "FAILED"}`);
+          console.error("%s", `AUDIT FAILURE: ${action} by ${userId} on ${resource} - ${success ? "SUCCESS" : "FAILED"}`);
         }
       }
       async logSecurityEvent(userId, eventType, severity, description, req, metadata) {
@@ -1414,131 +1414,12 @@ import passport from "passport";
 import session from "express-session";
 import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
-if (!process.env.REPLIT_DOMAINS) {
-  throw new Error("Environment variable REPLIT_DOMAINS not provided");
-}
-var getOidcConfig = memoize(
-  async () => {
-    return await client.discovery(
-      new URL(process.env.ISSUER_URL ?? "https://replit.com/oidc"),
-      process.env.REPL_ID
-    );
-  },
-  { maxAge: 3600 * 1e3 }
-);
-function getSession() {
-  const sessionTtl = 7 * 24 * 60 * 60 * 1e3;
-  const pgStore = connectPg(session);
-  const sessionStore = new pgStore({
-    conString: process.env.DATABASE_URL,
-    createTableIfMissing: false,
-    ttl: sessionTtl,
-    tableName: "sessions"
-  });
-  return session({
-    secret: process.env.SESSION_SECRET,
-    store: sessionStore,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure: true,
-      maxAge: sessionTtl
-    }
-  });
-}
-function updateUserSession(user, tokens) {
-  user.claims = tokens.claims();
-  user.access_token = tokens.access_token;
-  user.refresh_token = tokens.refresh_token;
-  user.expires_at = user.claims?.exp;
-}
-async function upsertUser(claims) {
-  await storage.upsertUser({
-    id: claims["sub"],
-    email: claims["email"],
-    firstName: claims["first_name"],
-    lastName: claims["last_name"],
-    profileImageUrl: claims["profile_image_url"]
-  });
-}
-async function setupAuth(app2) {
-  app2.set("trust proxy", 1);
-  app2.use(getSession());
-  app2.use(passport.initialize());
-  app2.use(passport.session());
-  const config = await getOidcConfig();
-  const verify = async (tokens, verified) => {
-    const user = {};
-    updateUserSession(user, tokens);
-    await upsertUser(tokens.claims());
-    verified(null, user);
-  };
-  for (const domain of process.env.REPLIT_DOMAINS.split(",")) {
-    const strategy = new Strategy(
-      {
-        name: `replitauth:${domain}`,
-        config,
-        scope: "openid email profile offline_access",
-        callbackURL: `https://${domain}/api/callback`
-      },
-      verify
-    );
-    passport.use(strategy);
-  }
-  passport.serializeUser((user, cb) => cb(null, user));
-  passport.deserializeUser((user, cb) => cb(null, user));
-  app2.get("/api/login", (req, res, next) => {
-    passport.authenticate(`replitauth:${req.hostname}`, {
-      prompt: "login consent",
-      scope: ["openid", "email", "profile", "offline_access"]
-    })(req, res, next);
-  });
-  app2.get("/api/callback", (req, res, next) => {
-    passport.authenticate(`replitauth:${req.hostname}`, {
-      successReturnToOrRedirect: "/",
-      failureRedirect: "/api/login"
-    })(req, res, next);
-  });
-  app2.get("/api/logout", (req, res) => {
-    req.logout(() => {
-      res.redirect(
-        client.buildEndSessionUrl(config, {
-          client_id: process.env.REPL_ID,
-          post_logout_redirect_uri: `${req.protocol}://${req.hostname}`
-        }).href
-      );
-    });
-  });
-}
-var isAuthenticated = async (req, res, next) => {
-  const user = req.user;
-  if (!req.isAuthenticated() || !user.expires_at) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
-  const now = Math.floor(Date.now() / 1e3);
-  if (now <= user.expires_at) {
-    return next();
-  }
-  const refreshToken = user.refresh_token;
-  if (!refreshToken) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
-  }
-  try {
-    const config = await getOidcConfig();
-    const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
-    updateUserSession(user, tokenResponse);
-    return next();
-  } catch (error) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
-  }
-};
+import rateLimit2 from "express-rate-limit";
 
 // server/middleware/security.ts
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import crypto from "crypto";
 var securityMiddleware = helmet({
   contentSecurityPolicy: {
     directives: {
@@ -1584,6 +1465,180 @@ var strictRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+var csrfProtection = (req, res, next) => {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+    return next();
+  }
+  const headerToken = req.get("x-csrf-token");
+  const bodyToken = typeof req.body?._csrf === "string" ? req.body._csrf : void 0;
+  const provided = headerToken || bodyToken;
+  const sessionToken = req.session?.csrfToken;
+  if (!provided || !sessionToken || provided !== sessionToken) {
+    return res.status(403).json({ message: "Invalid or missing CSRF token" });
+  }
+  next();
+};
+var ensureCsrfToken = (req, res, next) => {
+  if (!req.session) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  let sessionToken = req.session.csrfToken;
+  if (typeof sessionToken !== "string" || sessionToken.length < 32) {
+    sessionToken = crypto.randomBytes(32).toString("hex");
+    req.session.csrfToken = sessionToken;
+  }
+  res.cookie("csrf-token", sessionToken, {
+    httpOnly: false,
+    secure: true,
+    sameSite: "strict",
+    path: "/"
+  });
+  res.setHeader("X-CSRF-Token", sessionToken);
+  next();
+};
+
+// server/replitAuth.ts
+if (!process.env.REPLIT_DOMAINS) {
+  throw new Error("Environment variable REPLIT_DOMAINS not provided");
+}
+var getOidcConfig = memoize(
+  async () => {
+    return await client.discovery(
+      new URL(process.env.ISSUER_URL ?? "https://replit.com/oidc"),
+      process.env.REPL_ID
+    );
+  },
+  { maxAge: 3600 * 1e3 }
+);
+function getSession() {
+  const sessionTtl = 7 * 24 * 60 * 60 * 1e3;
+  const pgStore = connectPg(session);
+  const sessionStore = new pgStore({
+    conString: process.env.DATABASE_URL,
+    createTableIfMissing: false,
+    ttl: sessionTtl,
+    tableName: "sessions"
+  });
+  return session({
+    secret: process.env.SESSION_SECRET,
+    store: sessionStore,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: true,
+      maxAge: sessionTtl,
+      sameSite: "strict"
+      // CSRF protection: strict same-site cookies
+    }
+  });
+}
+function updateUserSession(user, tokens) {
+  user.claims = tokens.claims();
+  user.access_token = tokens.access_token;
+  user.refresh_token = tokens.refresh_token;
+  user.expires_at = user.claims?.exp;
+}
+async function upsertUser(claims) {
+  await storage.upsertUser({
+    id: claims["sub"],
+    email: claims["email"],
+    firstName: claims["first_name"],
+    lastName: claims["last_name"],
+    profileImageUrl: claims["profile_image_url"]
+  });
+}
+async function setupAuth(app2) {
+  app2.set("trust proxy", 1);
+  app2.use(getSession());
+  app2.use(passport.initialize());
+  app2.use(passport.session());
+  app2.use(ensureCsrfToken);
+  app2.use(csrfProtection);
+  const config = await getOidcConfig();
+  const verify = async (tokens, verified) => {
+    const user = {};
+    updateUserSession(user, tokens);
+    await upsertUser(tokens.claims());
+    verified(null, user);
+  };
+  for (const domain of process.env.REPLIT_DOMAINS.split(",")) {
+    const strategy = new Strategy(
+      {
+        name: `replitauth:${domain}`,
+        config,
+        scope: "openid email profile offline_access",
+        callbackURL: `https://${domain}/api/callback`
+      },
+      verify
+    );
+    passport.use(strategy);
+  }
+  passport.serializeUser((user, cb) => cb(null, user));
+  passport.deserializeUser((user, cb) => cb(null, user));
+  const authLimiter = rateLimit2({
+    windowMs: 15 * 60 * 1e3,
+    max: 20,
+    message: { error: "Too many auth requests, please try again later." }
+  });
+  app2.get("/api/login", authLimiter, (req, res, next) => {
+    passport.authenticate(`replitauth:${req.hostname}`, {
+      prompt: "login consent",
+      scope: ["openid", "email", "profile", "offline_access"]
+    })(req, res, next);
+  });
+  app2.get("/api/callback", authLimiter, (req, res, next) => {
+    passport.authenticate(`replitauth:${req.hostname}`, {
+      successReturnToOrRedirect: "/",
+      failureRedirect: "/api/login"
+    })(req, res, next);
+  });
+  app2.get("/api/logout", (req, res) => {
+    req.logout(() => {
+      res.redirect(
+        client.buildEndSessionUrl(config, {
+          client_id: process.env.REPL_ID,
+          post_logout_redirect_uri: `${req.protocol}://${req.hostname}`
+        }).href
+      );
+    });
+  });
+}
+function isUsableToken(token) {
+  return typeof token === "string" && token.length >= 16 && token.length <= 8192 && !/\s/.test(token);
+}
+var isAuthenticated = async (req, res, next) => {
+  const user = req.user;
+  if (!req.isAuthenticated() || !user || !isUsableToken(user.access_token)) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const expiresAt = user.expires_at;
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const now = Math.floor(Date.now() / 1e3);
+  if (now <= expiresAt) {
+    return next();
+  }
+  const refreshToken = user.refresh_token;
+  if (!isUsableToken(refreshToken)) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  try {
+    const config = await getOidcConfig();
+    const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
+    updateUserSession(user, tokenResponse);
+    if (!isUsableToken(user.access_token) || typeof user.expires_at !== "number" || !Number.isFinite(user.expires_at)) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    return next();
+  } catch {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+};
+
+// server/routes.ts
+import rateLimit3 from "express-rate-limit";
 
 // server/middleware/validation.ts
 import { ZodError } from "zod";
@@ -2552,7 +2607,16 @@ init_schema();
 async function registerRoutes(app2) {
   app2.use(securityMiddleware);
   await setupAuth(app2);
-  app2.use("/api", rateLimiter);
+  app2.use(
+    "/api",
+    rateLimit3({
+      windowMs: 15 * 60 * 1e3,
+      max: 100,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: "Too many requests from this IP, please try again later." }
+    })
+  );
   app2.get("/api/auth/user", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -2627,7 +2691,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch security status" });
     }
   });
-  app2.get("/api/agents", isAuthenticated, async (req, res) => {
+  app2.get("/api/agents", rateLimiter, isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       await auditLogger.log(userId, "agents.list.view", "agents", null, req);
@@ -2714,7 +2778,7 @@ async function registerRoutes(app2) {
         action
       });
     } catch (error) {
-      console.error(`Error performing agent ${req.params.action}:`, error);
+      console.error("Error performing agent %s:", req.params.action, error);
       res.status(500).json({ message: `Failed to ${req.params.action} agent` });
     }
   });
@@ -3147,7 +3211,7 @@ async function registerRoutes(app2) {
       ws2.send(JSON.stringify({ type: "connected", timestamp: Date.now() }));
     }
   });
-  app2.post("/api/foundation-model/reasoning", isAuthenticated, async (req, res) => {
+  app2.post("/api/foundation-model/reasoning", isAuthenticated, rateLimiter, async (req, res) => {
     try {
       const { query, context } = req.body;
       const reasoning = await foundationModel.executeReasoning(query, context);
@@ -3157,7 +3221,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to execute reasoning" });
     }
   });
-  app2.post("/api/foundation-model/intent-analysis", isAuthenticated, async (req, res) => {
+  app2.post("/api/foundation-model/intent-analysis", isAuthenticated, rateLimiter, async (req, res) => {
     try {
       const { text: text2 } = req.body;
       const analysis = await foundationModel.analyzeIntent(text2);
@@ -3167,7 +3231,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to analyze intent" });
     }
   });
-  app2.post("/api/foundation-model/workflow", isAuthenticated, async (req, res) => {
+  app2.post("/api/foundation-model/workflow", isAuthenticated, rateLimiter, async (req, res) => {
     try {
       const { description } = req.body;
       const workflow = await foundationModel.createWorkflow(description);
@@ -3177,7 +3241,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to create workflow" });
     }
   });
-  app2.get("/api/flywheel/runs", isAuthenticated, async (req, res) => {
+  app2.get("/api/flywheel/runs", isAuthenticated, rateLimiter, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       await auditLogger.log(userId, "flywheel.runs.view", "flywheel", null, req);
@@ -3216,7 +3280,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch flywheel runs" });
     }
   });
-  app2.post("/api/flywheel/runs", isAuthenticated, async (req, res) => {
+  app2.post("/api/flywheel/runs", rateLimiter, isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const { name, targetWorkload, description } = req.body;
@@ -3239,7 +3303,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to start flywheel run" });
     }
   });
-  app2.get("/api/flywheel/evaluations", isAuthenticated, async (req, res) => {
+  app2.get("/api/flywheel/evaluations", rateLimiter, isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       await auditLogger.log(userId, "flywheel.evaluations.view", "flywheel", null, req);
@@ -3273,7 +3337,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch evaluations" });
     }
   });
-  app2.get("/api/flywheel/optimizations", isAuthenticated, async (req, res) => {
+  app2.get("/api/flywheel/optimizations", rateLimiter, isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       await auditLogger.log(userId, "flywheel.optimizations.view", "flywheel", null, req);
@@ -3364,6 +3428,7 @@ var vite_config_default = defineConfig({
 
 // server/vite.ts
 import { nanoid } from "nanoid";
+import rateLimit4 from "express-rate-limit";
 var viteLogger = createLogger();
 function log(message, source = "express") {
   const formattedTime = (/* @__PURE__ */ new Date()).toLocaleTimeString("en-US", {
@@ -3394,6 +3459,8 @@ async function setupVite(app2, server) {
     appType: "custom"
   });
   app2.use(vite.middlewares);
+  const staticLimiter = rateLimit4({ windowMs: 15 * 60 * 1e3, max: 300 });
+  app2.use(staticLimiter);
   app2.use("*", async (req, res, next) => {
     const url = req.originalUrl;
     try {
@@ -3423,6 +3490,8 @@ function serveStatic(app2) {
       `Could not find the build directory: ${distPath}, make sure to build the client first`
     );
   }
+  const fileLimiter = rateLimit4({ windowMs: 15 * 60 * 1e3, max: 500 });
+  app2.use(fileLimiter);
   app2.use(express.static(distPath));
   app2.use("*", (_req, res) => {
     res.sendFile(path2.resolve(distPath, "index.html"));

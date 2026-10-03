@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, csrfHeaders } from "@/lib/queryClient";
 
 interface FlywheelRun {
   id: number;
@@ -97,7 +97,9 @@ export default function DataFlywheel() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...csrfHeaders("POST"),
         },
+        credentials: "include",
         body: JSON.stringify(data),
       });
       if (!response.ok) {

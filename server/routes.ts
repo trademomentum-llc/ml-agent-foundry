@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { securityMiddleware, rateLimiter } from "./middleware/security";
+import rateLimit from "express-rate-limit";
 import { validateRequest } from "./middleware/validation";
 import { agentFactory } from "./services/agentFactory";
 import { taskQueue } from "./services/taskQueue";
@@ -19,8 +20,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
 
-  // Rate limiting for API routes
-  app.use("/api", rateLimiter);
+  // Rate limiting for API routes. Constructed inline so the limiter is part
+  // of this router stack (not only a re-exported middleware reference).
+  app.use(
+    "/api",
+    rateLimit({
+      windowMs: 15 * 60 * 1000,
+      max: 100,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: "Too many requests from this IP, please try again later." },
+    }),
+  );
 
   // Auth routes
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
