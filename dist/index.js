@@ -848,6 +848,14 @@ var init_openai = __esm({
 });
 
 // server/services/auditLogger.ts
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
+}
+function metadataString(metadata, key) {
+  if (!isRecord(metadata)) return void 0;
+  const value = metadata[key];
+  return typeof value === "string" ? value : void 0;
+}
 var AuditLogger, auditLogger;
 var init_auditLogger = __esm({
   "server/services/auditLogger.ts"() {
@@ -956,12 +964,12 @@ var init_auditLogger = __esm({
       async getSecurityAlerts(userId, timeRange, severity) {
         const auditLogs = await storage.getAuditLogs(userId, 100);
         return auditLogs.filter(
-          (log2) => log2.action.startsWith("security.") && log2.createdAt >= timeRange.from && log2.createdAt <= timeRange.to && (!severity || log2.metadata?.severity === severity)
+          (log2) => log2.action.startsWith("security.") && log2.createdAt != null && log2.createdAt >= timeRange.from && log2.createdAt <= timeRange.to && (!severity || metadataString(log2.metadata, "severity") === severity)
         ).map((log2) => ({
           id: log2.id,
           action: log2.action,
-          severity: log2.metadata?.severity || "medium",
-          description: log2.metadata?.description || log2.action,
+          severity: metadataString(log2.metadata, "severity") || "medium",
+          description: metadataString(log2.metadata, "description") || log2.action,
           timestamp: log2.createdAt,
           userId: log2.userId,
           ipAddress: log2.ipAddress,
@@ -971,7 +979,7 @@ var init_auditLogger = __esm({
       async generateSecurityReport(userId, timeRange) {
         const auditLogs = await storage.getAuditLogs(userId, 1e3);
         const filteredLogs = auditLogs.filter(
-          (log2) => log2.createdAt >= timeRange.from && log2.createdAt <= timeRange.to
+          (log2) => log2.createdAt != null && log2.createdAt >= timeRange.from && log2.createdAt <= timeRange.to
         );
         const securityEvents = filteredLogs.filter(
           (log2) => log2.action.startsWith("security.") || log2.action.startsWith("auth.")
@@ -980,7 +988,7 @@ var init_auditLogger = __esm({
           (log2) => log2.action === "auth.login_failure"
         );
         const criticalEvents = filteredLogs.filter(
-          (log2) => log2.metadata?.severity === "critical" || !log2.success
+          (log2) => metadataString(log2.metadata, "severity") === "critical" || !log2.success
         );
         const actionCounts = /* @__PURE__ */ new Map();
         filteredLogs.forEach((log2) => {
@@ -1137,6 +1145,9 @@ var init_nationalReserve = __esm({
           "national_reserve.deploy",
           "agent_system",
           null,
+          null,
+          true,
+          null,
           { deployedCount: deployedAgents.length }
         );
         return deployedAgents;
@@ -1289,6 +1300,9 @@ var init_nationalReserve = __esm({
           userId,
           "conversation.analyze",
           "communication",
+          null,
+          null,
+          true,
           null,
           {
             context,
@@ -1669,6 +1683,15 @@ var validateRequest = (schema) => {
 init_storage();
 init_openai();
 init_auditLogger();
+function isRecord2(value) {
+  return typeof value === "object" && value !== null;
+}
+function securityFlag(config, key) {
+  return isRecord2(config) && config[key] === true;
+}
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
 var AgentFactory = class {
   agentCapabilities = /* @__PURE__ */ new Map();
   constructor() {
@@ -1808,7 +1831,7 @@ var AgentFactory = class {
         agent.id.toString(),
         null,
         false,
-        error.message
+        errorMessage(error)
       );
       throw error;
     }
@@ -1847,7 +1870,7 @@ var AgentFactory = class {
         null,
         null,
         false,
-        error.message,
+        errorMessage(error),
         { agentId, taskType, parameters }
       );
       await storage.createActivity({
@@ -1855,7 +1878,7 @@ var AgentFactory = class {
         agentId: agent.id,
         type: "task.failed",
         message: `Agent "${agent.name}" failed to complete task: ${taskType}`,
-        metadata: { taskType, parameters, error: error.message }
+        metadata: { taskType, parameters, error: errorMessage(error) }
       });
       throw error;
     }
@@ -1888,7 +1911,7 @@ var AgentFactory = class {
           keywords: parameters.keywords
         };
         const contentResult = await openaiService.generateContent(contentRequest);
-        if (agent.securityConfig?.approvalRequired) {
+        if (securityFlag(agent.securityConfig, "approvalRequired")) {
           await storage.createApproval({
             agentId: agent.id,
             userId: agent.userId,
@@ -1936,7 +1959,7 @@ var AgentFactory = class {
     switch (taskType) {
       case "create_campaign":
         const campaignId = `campaign_${Date.now()}`;
-        if (agent.securityConfig?.approvalRequired) {
+        if (securityFlag(agent.securityConfig, "approvalRequired")) {
           await storage.createApproval({
             agentId: agent.id,
             userId: agent.userId,
@@ -2089,11 +2112,11 @@ var AgentFactory = class {
       issues.push("No security configuration found");
       recommendations.push("Configure security settings for the agent");
     }
-    if (!agent.securityConfig?.encryption) {
+    if (!securityFlag(agent.securityConfig, "encryption")) {
       issues.push("Encryption not enabled");
       recommendations.push("Enable encryption for sensitive data");
     }
-    if (!agent.securityConfig?.approvalRequired) {
+    if (!securityFlag(agent.securityConfig, "approvalRequired")) {
       recommendations.push("Consider enabling approval requirements for high-risk actions");
     }
     return {
@@ -2126,8 +2149,7 @@ var TaskQueue = class {
       maxRetries: 3
     };
     await storage.updateTask(task.id, {
-      status: "pending",
-      updatedAt: /* @__PURE__ */ new Date()
+      status: "pending"
     });
     if (priority === "high") {
       this.queue.unshift(queuedTask);
@@ -2173,8 +2195,7 @@ var TaskQueue = class {
     try {
       await storage.updateTask(task.id, {
         status: "processing",
-        startedAt: /* @__PURE__ */ new Date(),
-        updatedAt: /* @__PURE__ */ new Date()
+        startedAt: /* @__PURE__ */ new Date()
       });
       await auditLogger.log(
         task.userId,
@@ -2189,8 +2210,7 @@ var TaskQueue = class {
       let result;
       if (task.scheduledFor && new Date(task.scheduledFor) > /* @__PURE__ */ new Date()) {
         await storage.updateTask(task.id, {
-          status: "pending",
-          updatedAt: /* @__PURE__ */ new Date()
+          status: "pending"
         });
         setTimeout(() => {
           this.queue.push(task);
@@ -2209,8 +2229,7 @@ var TaskQueue = class {
       await storage.updateTask(task.id, {
         status: "completed",
         result,
-        completedAt: /* @__PURE__ */ new Date(),
-        updatedAt: /* @__PURE__ */ new Date()
+        completedAt: /* @__PURE__ */ new Date()
       });
       await storage.createActivity({
         userId: task.userId,

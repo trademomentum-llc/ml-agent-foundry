@@ -2,16 +2,14 @@ import { InsertAuditLog } from "@shared/schema";
 import { storage } from "../storage";
 import { Request } from "express";
 
-interface AuditLogEntry {
-  userId: string;
-  action: string;
-  resource: string;
-  resourceId?: string | null;
-  ipAddress?: string;
-  userAgent?: string;
-  success: boolean;
-  error?: string | null;
-  metadata?: Record<string, any>;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function metadataString(metadata: unknown, key: string): string | undefined {
+  if (!isRecord(metadata)) return undefined;
+  const value = metadata[key];
+  return typeof value === "string" ? value : undefined;
 }
 
 class AuditLogger {
@@ -176,15 +174,16 @@ class AuditLogger {
     return auditLogs
       .filter(log => 
         log.action.startsWith("security.") &&
+        log.createdAt != null &&
         log.createdAt >= timeRange.from &&
         log.createdAt <= timeRange.to &&
-        (!severity || log.metadata?.severity === severity)
+        (!severity || metadataString(log.metadata, "severity") === severity)
       )
       .map(log => ({
         id: log.id,
         action: log.action,
-        severity: log.metadata?.severity || "medium",
-        description: log.metadata?.description || log.action,
+        severity: metadataString(log.metadata, "severity") || "medium",
+        description: metadataString(log.metadata, "description") || log.action,
         timestamp: log.createdAt,
         userId: log.userId,
         ipAddress: log.ipAddress,
@@ -206,6 +205,7 @@ class AuditLogger {
     const auditLogs = await storage.getAuditLogs(userId, 1000);
     
     const filteredLogs = auditLogs.filter(log => 
+      log.createdAt != null &&
       log.createdAt >= timeRange.from &&
       log.createdAt <= timeRange.to
     );
@@ -219,7 +219,7 @@ class AuditLogger {
     );
 
     const criticalEvents = filteredLogs.filter(log => 
-      log.metadata?.severity === "critical" || !log.success
+      metadataString(log.metadata, "severity") === "critical" || !log.success
     );
 
     // Count actions
@@ -282,7 +282,7 @@ class AuditLogger {
     return sensitiveResources.some(sensitive => resource.includes(sensitive));
   }
 
-  private async handleCriticalEvent(auditEntry: AuditLogEntry): Promise<void> {
+  private async handleCriticalEvent(auditEntry: InsertAuditLog): Promise<void> {
     // In a production environment, this would:
     // 1. Send alerts to administrators
     // 2. Trigger automated security responses
