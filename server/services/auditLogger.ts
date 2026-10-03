@@ -1,6 +1,7 @@
 import { InsertAuditLog } from "@shared/schema";
 import { storage } from "../storage";
 import { Request } from "express";
+import { sanitizeForLog } from "../utils/logSanitize";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -38,14 +39,19 @@ class AuditLogger {
 
       await storage.createAuditLog(auditEntry);
 
-      // Log to console for immediate visibility
+      // Log to console for immediate visibility — sanitize all external fields; constant formats only.
       const logLevel = success ? "INFO" : "ERROR";
-      const logMessage = `[${logLevel}] ${userId || "system"} - ${action} on ${resource}${resourceId ? ` (${resourceId})` : ""} - ${success ? "SUCCESS" : "FAILED"}`;
+      const safeUser = sanitizeForLog(userId || "system", 128);
+      const safeAction = sanitizeForLog(action, 128);
+      const safeResource = sanitizeForLog(resource, 128);
+      const safeResourceId = resourceId ? sanitizeForLog(resourceId, 128) : "";
+      const safeError = error ? sanitizeForLog(error, 300) : "";
+      const outcome = success ? "SUCCESS" : "FAILED";
       
       if (success) {
-        console.log("%s", logMessage);
+        console.log("[%s] %s - %s on %s%s - %s", logLevel, safeUser, safeAction, safeResource, safeResourceId ? ` (${safeResourceId})` : "", outcome);
       } else {
-        console.error("%s %s", logMessage, error ?? "");
+        console.error("[%s] %s - %s on %s%s - %s %s", logLevel, safeUser, safeAction, safeResource, safeResourceId ? ` (${safeResourceId})` : "", outcome, safeError);
       }
 
       // Additional security alerting for critical actions
@@ -55,8 +61,8 @@ class AuditLogger {
 
     } catch (auditError) {
       console.error("Failed to write audit log:", auditError);
-      // Still log to console even if database fails
-      console.error("%s", `AUDIT FAILURE: ${action} by ${userId} on ${resource} - ${success ? "SUCCESS" : "FAILED"}`);
+      // Still log to console even if database fails — constant format, sanitized args.
+      console.error("AUDIT FAILURE: %s by %s on %s - %s", sanitizeForLog(action, 128), sanitizeForLog(userId, 128), sanitizeForLog(resource, 128), success ? "SUCCESS" : "FAILED");
     }
   }
 
@@ -87,13 +93,11 @@ class AuditLogger {
       }
     );
 
-    // Immediate console output for security events
-    const logMessage = `[SECURITY:${severity.toUpperCase()}] ${eventType} - ${description}`;
-    
+    // Immediate console output for security events — constant format, sanitized args.
     if (severity === "critical" || severity === "high") {
-      console.error(logMessage);
+      console.error("[SECURITY:%s] %s - %s", sanitizeForLog(severity.toUpperCase(), 16), sanitizeForLog(eventType, 128), sanitizeForLog(description, 300));
     } else {
-      console.warn(logMessage);
+      console.warn("[SECURITY:%s] %s - %s", sanitizeForLog(severity.toUpperCase(), 16), sanitizeForLog(eventType, 128), sanitizeForLog(description, 300));
     }
   }
 
@@ -289,9 +293,12 @@ class AuditLogger {
     // 3. Log to external security monitoring systems
     // 4. Create incident tickets
 
-    const alertMessage = `CRITICAL SECURITY EVENT: ${auditEntry.action} on ${auditEntry.resource} by ${auditEntry.userId}`;
-    
-    console.error("🚨 SECURITY ALERT:", alertMessage);
+    console.error(
+      "SECURITY ALERT: CRITICAL SECURITY EVENT: %s on %s by %s",
+      sanitizeForLog(auditEntry.action, 128),
+      sanitizeForLog(auditEntry.resource, 128),
+      sanitizeForLog(auditEntry.userId, 128),
+    );
     
     // Here you would integrate with:
     // - Email/SMS alerting systems
@@ -299,13 +306,13 @@ class AuditLogger {
     // - External SIEM systems
     // - Incident management tools
     
-    // For now, we'll just ensure it's logged prominently
+    // For now, we'll just ensure it's logged prominently (no raw external blobs).
     if (auditEntry.error) {
-      console.error("Error details:", auditEntry.error);
+      console.error("Error details: %s", sanitizeForLog(auditEntry.error, 300));
     }
     
     if (auditEntry.metadata) {
-      console.error("Additional context:", auditEntry.metadata);
+      console.error("Additional context keys=%s", sanitizeForLog(Object.keys(auditEntry.metadata).join(","), 200));
     }
   }
 }

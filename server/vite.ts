@@ -6,6 +6,7 @@ import { type Server } from "http";
 import viteConfig from "../vite.config";
 import { nanoid } from "nanoid";
 import rateLimit from "express-rate-limit";
+import { sanitizeForLog } from "./utils/logSanitize";
 
 const viteLogger = createLogger();
 
@@ -17,7 +18,8 @@ export function log(message: string, source = "express") {
     hour12: true,
   });
 
-  console.log(`${formattedTime} [${source}] ${message}`);
+  // Constant format string; sanitize external/path-derived content (CodeQL js/log-injection).
+  console.log("%s [%s] %s", formattedTime, sanitizeForLog(source, 40), sanitizeForLog(message, 500));
 }
 
 export async function setupVite(app: Express, server: Server) {

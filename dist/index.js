@@ -847,6 +847,18 @@ var init_openai = __esm({
   }
 });
 
+// server/utils/logSanitize.ts
+function sanitizeForLog(value, maxLen = 200) {
+  if (value == null) return "";
+  const raw = typeof value === "string" ? value : String(value);
+  return raw.replace(/[\u0000-\u001F\u007F\u2028\u2029]/g, "").slice(0, maxLen);
+}
+var init_logSanitize = __esm({
+  "server/utils/logSanitize.ts"() {
+    "use strict";
+  }
+});
+
 // server/services/auditLogger.ts
 function isRecord(value) {
   return typeof value === "object" && value !== null;
@@ -861,6 +873,7 @@ var init_auditLogger = __esm({
   "server/services/auditLogger.ts"() {
     "use strict";
     init_storage();
+    init_logSanitize();
     AuditLogger = class {
       async log(userId, action, resource, resourceId, req, success = true, error, metadata) {
         try {
@@ -877,18 +890,23 @@ var init_auditLogger = __esm({
           };
           await storage.createAuditLog(auditEntry);
           const logLevel = success ? "INFO" : "ERROR";
-          const logMessage = `[${logLevel}] ${userId || "system"} - ${action} on ${resource}${resourceId ? ` (${resourceId})` : ""} - ${success ? "SUCCESS" : "FAILED"}`;
+          const safeUser = sanitizeForLog(userId || "system", 128);
+          const safeAction = sanitizeForLog(action, 128);
+          const safeResource = sanitizeForLog(resource, 128);
+          const safeResourceId = resourceId ? sanitizeForLog(resourceId, 128) : "";
+          const safeError = error ? sanitizeForLog(error, 300) : "";
+          const outcome = success ? "SUCCESS" : "FAILED";
           if (success) {
-            console.log("%s", logMessage);
+            console.log("[%s] %s - %s on %s%s - %s", logLevel, safeUser, safeAction, safeResource, safeResourceId ? ` (${safeResourceId})` : "", outcome);
           } else {
-            console.error("%s %s", logMessage, error ?? "");
+            console.error("[%s] %s - %s on %s%s - %s %s", logLevel, safeUser, safeAction, safeResource, safeResourceId ? ` (${safeResourceId})` : "", outcome, safeError);
           }
           if (this.isCriticalAction(action) || !success) {
             await this.handleCriticalEvent(auditEntry);
           }
         } catch (auditError) {
           console.error("Failed to write audit log:", auditError);
-          console.error("%s", `AUDIT FAILURE: ${action} by ${userId} on ${resource} - ${success ? "SUCCESS" : "FAILED"}`);
+          console.error("AUDIT FAILURE: %s by %s on %s - %s", sanitizeForLog(action, 128), sanitizeForLog(userId, 128), sanitizeForLog(resource, 128), success ? "SUCCESS" : "FAILED");
         }
       }
       async logSecurityEvent(userId, eventType, severity, description, req, metadata) {
@@ -909,11 +927,10 @@ var init_auditLogger = __esm({
             description
           }
         );
-        const logMessage = `[SECURITY:${severity.toUpperCase()}] ${eventType} - ${description}`;
         if (severity === "critical" || severity === "high") {
-          console.error(logMessage);
+          console.error("[SECURITY:%s] %s - %s", sanitizeForLog(severity.toUpperCase(), 16), sanitizeForLog(eventType, 128), sanitizeForLog(description, 300));
         } else {
-          console.warn(logMessage);
+          console.warn("[SECURITY:%s] %s - %s", sanitizeForLog(severity.toUpperCase(), 16), sanitizeForLog(eventType, 128), sanitizeForLog(description, 300));
         }
       }
       async logAuthEvent(userId, eventType, req, metadata) {
@@ -1036,13 +1053,17 @@ var init_auditLogger = __esm({
         return sensitiveResources.some((sensitive) => resource.includes(sensitive));
       }
       async handleCriticalEvent(auditEntry) {
-        const alertMessage = `CRITICAL SECURITY EVENT: ${auditEntry.action} on ${auditEntry.resource} by ${auditEntry.userId}`;
-        console.error("\u{1F6A8} SECURITY ALERT:", alertMessage);
+        console.error(
+          "SECURITY ALERT: CRITICAL SECURITY EVENT: %s on %s by %s",
+          sanitizeForLog(auditEntry.action, 128),
+          sanitizeForLog(auditEntry.resource, 128),
+          sanitizeForLog(auditEntry.userId, 128)
+        );
         if (auditEntry.error) {
-          console.error("Error details:", auditEntry.error);
+          console.error("Error details: %s", sanitizeForLog(auditEntry.error, 300));
         }
         if (auditEntry.metadata) {
-          console.error("Additional context:", auditEntry.metadata);
+          console.error("Additional context keys=%s", sanitizeForLog(Object.keys(auditEntry.metadata).join(","), 200));
         }
       }
     };
@@ -2623,6 +2644,7 @@ var foundationModel = new BERTFoundationModel();
 
 // server/routes.ts
 init_schema();
+init_logSanitize();
 async function registerRoutes(app2) {
   app2.use(securityMiddleware);
   await setupAuth(app2);
@@ -2790,15 +2812,15 @@ async function registerRoutes(app2) {
       const userId = req.user.claims.sub;
       const agentId = req.params.id;
       const action = req.params.action;
-      await auditLogger.log(userId, `agent.${action}`, "agents", agentId, req);
+      await auditLogger.log(userId, `agent.${sanitizeForLog(action, 64)}`, "agents", sanitizeForLog(agentId, 64), req);
       res.json({
-        message: `Agent ${action} completed successfully`,
+        message: "Agent action completed successfully",
         agentId,
         action
       });
     } catch (error) {
-      console.error("Error performing agent %s:", req.params.action, error);
-      res.status(500).json({ message: `Failed to ${req.params.action} agent` });
+      console.error("Error performing agent action:", error);
+      res.status(500).json({ message: "Failed to perform agent action" });
     }
   });
   app2.get("/api/dashboard/activities", isAuthenticated, async (req, res) => {
@@ -3206,7 +3228,7 @@ async function registerRoutes(app2) {
     ws2.on("message", (message) => {
       try {
         const data = JSON.parse(message.toString());
-        console.log("Received WebSocket message:", data);
+        console.log("Received WebSocket message type=%s", sanitizeForLog(data?.type, 64));
         switch (data.type) {
           case "ping":
             ws2.send(JSON.stringify({ type: "pong" }));
@@ -3214,7 +3236,7 @@ async function registerRoutes(app2) {
           case "subscribe":
             break;
           default:
-            console.log("Unknown message type:", data.type);
+            console.log("Unknown WebSocket message type=%s", sanitizeForLog(data?.type, 64));
         }
       } catch (error) {
         console.error("Error handling WebSocket message:", error);
@@ -3446,6 +3468,7 @@ var vite_config_default = defineConfig({
 });
 
 // server/vite.ts
+init_logSanitize();
 import { nanoid } from "nanoid";
 import rateLimit4 from "express-rate-limit";
 var viteLogger = createLogger();
@@ -3456,7 +3479,7 @@ function log(message, source = "express") {
     second: "2-digit",
     hour12: true
   });
-  console.log(`${formattedTime} [${source}] ${message}`);
+  console.log("%s [%s] %s", formattedTime, sanitizeForLog(source, 40), sanitizeForLog(message, 500));
 }
 async function setupVite(app2, server) {
   const serverOptions = {
