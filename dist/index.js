@@ -876,44 +876,17 @@ var init_auditLogger = __esm({
             metadata
           };
           await storage.createAuditLog(auditEntry);
-          const outcome = success ? "SUCCESS" : "FAILED";
-          const actionLen = typeof action === "string" ? action.length : 0;
-          const userLen = userId ? userId.length : 0;
-          const resourceLen = typeof resource === "string" ? resource.length : 0;
-          const resourceIdLen = resourceId ? resourceId.length : 0;
-          const errorLen = error ? error.length : 0;
           if (success) {
-            console.log(
-              "Audit event recorded outcome=%s actionLen=%s userLen=%s resourceLen=%s resourceIdLen=%s",
-              outcome,
-              String(actionLen),
-              String(userLen),
-              String(resourceLen),
-              String(resourceIdLen)
-            );
+            console.log("Audit event recorded: success");
           } else {
-            console.error(
-              "Audit event recorded outcome=%s actionLen=%s userLen=%s resourceLen=%s resourceIdLen=%s errorLen=%s",
-              outcome,
-              String(actionLen),
-              String(userLen),
-              String(resourceLen),
-              String(resourceIdLen),
-              String(errorLen)
-            );
+            console.error("Audit event recorded: failure");
           }
           if (this.isCriticalAction(action) || !success) {
             await this.handleCriticalEvent(auditEntry);
           }
         } catch (auditError) {
           console.error("Failed to write audit log");
-          console.error(
-            "AUDIT FAILURE outcome=%s actionLen=%s userLen=%s resourceLen=%s",
-            success ? "SUCCESS" : "FAILED",
-            String(typeof action === "string" ? action.length : 0),
-            String(userId ? userId.length : 0),
-            String(typeof resource === "string" ? resource.length : 0)
-          );
+          console.error("AUDIT FAILURE");
         }
       }
       async logSecurityEvent(userId, eventType, severity, description, req, metadata) {
@@ -934,21 +907,10 @@ var init_auditLogger = __esm({
             description
           }
         );
-        const sev = severity.toUpperCase();
         if (severity === "critical" || severity === "high") {
-          console.error(
-            "SECURITY event severity=%s eventTypeLen=%s descriptionLen=%s",
-            sev,
-            String(eventType.length),
-            String(description.length)
-          );
+          console.error("SECURITY event recorded: high");
         } else {
-          console.warn(
-            "SECURITY event severity=%s eventTypeLen=%s descriptionLen=%s",
-            sev,
-            String(eventType.length),
-            String(description.length)
-          );
+          console.warn("SECURITY event recorded: low");
         }
       }
       async logAuthEvent(userId, eventType, req, metadata) {
@@ -1071,17 +1033,12 @@ var init_auditLogger = __esm({
         return sensitiveResources.some((sensitive) => resource.includes(sensitive));
       }
       async handleCriticalEvent(auditEntry) {
-        console.error(
-          "SECURITY ALERT: critical audit event actionLen=%s resourceLen=%s userLen=%s",
-          String(auditEntry.action ? auditEntry.action.length : 0),
-          String(auditEntry.resource ? auditEntry.resource.length : 0),
-          String(auditEntry.userId ? auditEntry.userId.length : 0)
-        );
+        console.error("SECURITY ALERT: critical audit event");
         if (auditEntry.error) {
-          console.error("Critical event has error detailLen=%s", String(auditEntry.error.length));
+          console.error("Critical event includes error detail");
         }
         if (auditEntry.metadata) {
-          console.error("Critical event metadataKeyCount=%s", String(Object.keys(auditEntry.metadata).length));
+          console.error("Critical event includes metadata");
         }
       }
     };
@@ -3254,7 +3211,7 @@ async function registerRoutes(app2) {
     ws2.on("message", (message) => {
       try {
         const data = JSON.parse(message.toString());
-        console.log("Received WebSocket message len=%s", String(message.toString().length));
+        console.log("Received WebSocket message");
         switch (data.type) {
           case "ping":
             ws2.send(JSON.stringify({ type: "pong" }));
@@ -3504,9 +3461,7 @@ function log(message, source = "express") {
     second: "2-digit",
     hour12: true
   });
-  const srcLen = typeof source === "string" ? source.length : 0;
-  const msgLen = typeof message === "string" ? message.length : 0;
-  console.log("%s sourceLen=%s messageLen=%s", formattedTime, String(srcLen), String(msgLen));
+  console.log("%s server log event", formattedTime);
 }
 async function setupVite(app2, server) {
   const serverOptions = {

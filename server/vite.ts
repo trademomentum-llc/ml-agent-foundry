@@ -17,10 +17,8 @@ export function log(message: string, source = "express") {
     hour12: true,
   });
 
-  // No external strings in the sink (CodeQL js/log-injection) — lengths only.
-  const srcLen = typeof source === "string" ? source.length : 0;
-  const msgLen = typeof message === "string" ? message.length : 0;
-  console.log("%s sourceLen=%s messageLen=%s", formattedTime, String(srcLen), String(msgLen));
+  // Static message only — never log request/path-derived content (CodeQL js/log-injection).
+  console.log("%s server log event", formattedTime);
 }
 
 export async function setupVite(app: Express, server: Server) {

@@ -58,8 +58,8 @@ export function useWebSocket() {
       wsRef.current.onmessage = (event) => {
         try {
           const message: WebSocketMessage = JSON.parse(event.data);
-          // Length only — never log message type/payload (CodeQL js/log-injection).
-          console.log("WebSocket message received len=%s", String(typeof event.data === "string" ? event.data.length : 0));
+          // Static message only (CodeQL js/log-injection).
+          console.log("WebSocket message received");
           
           // Handle different message types
           switch (message.type) {

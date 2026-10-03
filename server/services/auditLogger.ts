@@ -38,34 +38,12 @@ class AuditLogger {
 
       await storage.createAuditLog(auditEntry);
 
-      // Console sink: never pass external/user strings (CodeQL js/log-injection).
-      // Persist full detail via storage.createAuditLog above; log lengths/outcome only.
-      const outcome = success ? "SUCCESS" : "FAILED";
-      const actionLen = typeof action === "string" ? action.length : 0;
-      const userLen = userId ? userId.length : 0;
-      const resourceLen = typeof resource === "string" ? resource.length : 0;
-      const resourceIdLen = resourceId ? resourceId.length : 0;
-      const errorLen = error ? error.length : 0;
-
+      // Console sink: static messages only (CodeQL js/log-injection).
+      // Full detail stays in storage.createAuditLog; do not log derived lengths either.
       if (success) {
-        console.log(
-          "Audit event recorded outcome=%s actionLen=%s userLen=%s resourceLen=%s resourceIdLen=%s",
-          outcome,
-          String(actionLen),
-          String(userLen),
-          String(resourceLen),
-          String(resourceIdLen),
-        );
+        console.log("Audit event recorded: success");
       } else {
-        console.error(
-          "Audit event recorded outcome=%s actionLen=%s userLen=%s resourceLen=%s resourceIdLen=%s errorLen=%s",
-          outcome,
-          String(actionLen),
-          String(userLen),
-          String(resourceLen),
-          String(resourceIdLen),
-          String(errorLen),
-        );
+        console.error("Audit event recorded: failure");
       }
 
       // Additional security alerting for critical actions
@@ -75,14 +53,7 @@ class AuditLogger {
 
     } catch (auditError) {
       console.error("Failed to write audit log");
-      // No external strings in the sink — lengths/outcome only.
-      console.error(
-        "AUDIT FAILURE outcome=%s actionLen=%s userLen=%s resourceLen=%s",
-        success ? "SUCCESS" : "FAILED",
-        String(typeof action === "string" ? action.length : 0),
-        String(userId ? userId.length : 0),
-        String(typeof resource === "string" ? resource.length : 0),
-      );
+      console.error("AUDIT FAILURE");
     }
   }
 
@@ -113,22 +84,11 @@ class AuditLogger {
       }
     );
 
-    // Immediate console output — severity enum is local; never log eventType/description strings.
-    const sev = severity.toUpperCase();
+    // Static console messages only — details live in the audit DB row.
     if (severity === "critical" || severity === "high") {
-      console.error(
-        "SECURITY event severity=%s eventTypeLen=%s descriptionLen=%s",
-        sev,
-        String(eventType.length),
-        String(description.length),
-      );
+      console.error("SECURITY event recorded: high");
     } else {
-      console.warn(
-        "SECURITY event severity=%s eventTypeLen=%s descriptionLen=%s",
-        sev,
-        String(eventType.length),
-        String(description.length),
-      );
+      console.warn("SECURITY event recorded: low");
     }
   }
 
@@ -324,12 +284,7 @@ class AuditLogger {
     // 3. Log to external security monitoring systems
     // 4. Create incident tickets
 
-    console.error(
-      "SECURITY ALERT: critical audit event actionLen=%s resourceLen=%s userLen=%s",
-      String(auditEntry.action ? auditEntry.action.length : 0),
-      String(auditEntry.resource ? auditEntry.resource.length : 0),
-      String(auditEntry.userId ? auditEntry.userId.length : 0),
-    );
+    console.error("SECURITY ALERT: critical audit event");
     
     // Here you would integrate with:
     // - Email/SMS alerting systems
@@ -337,13 +292,12 @@ class AuditLogger {
     // - External SIEM systems
     // - Incident management tools
     
-    // Lengths only — do not log error/metadata contents to console.
     if (auditEntry.error) {
-      console.error("Critical event has error detailLen=%s", String(auditEntry.error.length));
+      console.error("Critical event includes error detail");
     }
     
     if (auditEntry.metadata) {
-      console.error("Critical event metadataKeyCount=%s", String(Object.keys(auditEntry.metadata).length));
+      console.error("Critical event includes metadata");
     }
   }
 }

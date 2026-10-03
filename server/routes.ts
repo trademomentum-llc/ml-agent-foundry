@@ -740,7 +740,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const data = JSON.parse(message.toString());
         // Do not log raw WS payload (CodeQL js/log-injection).
-        console.log("Received WebSocket message len=%s", String(message.toString().length));
+        console.log("Received WebSocket message");
         
         // Handle different message types
         switch (data.type) {
