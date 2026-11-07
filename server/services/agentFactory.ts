@@ -26,6 +26,19 @@ export interface AgentCapability {
   securityLevel: "low" | "medium" | "high";
 }
 
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function securityFlag(config: unknown, key: "approvalRequired" | "encryption"): boolean {
+  return isRecord(config) && config[key] === true;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 class AgentFactory {
   private agentCapabilities: Map<string, AgentCapability[]> = new Map();
 
@@ -184,7 +197,7 @@ class AgentFactory {
         agent.id.toString(),
         null,
         false,
-        error.message
+        errorMessage(error)
       );
 
       throw error;
@@ -231,7 +244,7 @@ class AgentFactory {
         null,
         null,
         false,
-        error.message,
+        errorMessage(error),
         { agentId, taskType, parameters }
       );
 
@@ -240,7 +253,7 @@ class AgentFactory {
         agentId: agent.id,
         type: "task.failed",
         message: `Agent "${agent.name}" failed to complete task: ${taskType}`,
-        metadata: { taskType, parameters, error: error.message },
+        metadata: { taskType, parameters, error: errorMessage(error) },
       });
 
       throw error;
@@ -280,7 +293,7 @@ class AgentFactory {
         const contentResult = await openaiService.generateContent(contentRequest);
         
         // Check if approval is required
-        if (agent.securityConfig?.approvalRequired) {
+        if (securityFlag(agent.securityConfig, "approvalRequired")) {
           await storage.createApproval({
             agentId: agent.id,
             userId: agent.userId!,
@@ -335,7 +348,7 @@ class AgentFactory {
       case "create_campaign":
         const campaignId = `campaign_${Date.now()}`;
         
-        if (agent.securityConfig?.approvalRequired) {
+        if (securityFlag(agent.securityConfig, "approvalRequired")) {
           await storage.createApproval({
             agentId: agent.id,
             userId: agent.userId!,
@@ -515,13 +528,13 @@ class AgentFactory {
     }
 
     // Check encryption settings
-    if (!agent.securityConfig?.encryption) {
+    if (!securityFlag(agent.securityConfig, "encryption")) {
       issues.push("Encryption not enabled");
       recommendations.push("Enable encryption for sensitive data");
     }
 
     // Check approval requirements
-    if (!agent.securityConfig?.approvalRequired) {
+    if (!securityFlag(agent.securityConfig, "approvalRequired")) {
       recommendations.push("Consider enabling approval requirements for high-risk actions");
     }
 

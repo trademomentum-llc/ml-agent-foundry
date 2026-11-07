@@ -1,5 +1,21 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
+
+/** Read the CSRF token mirrored by ensureCsrfToken into the csrf-token cookie. */
+export function readCsrfToken(): string {
+  if (typeof document === "undefined") return "";
+  const match = document.cookie.match(/(?:^|;\s*)csrf-token=([^;]*)/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+export function csrfHeaders(method: string): Record<string, string> {
+  if (method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD" || method.toUpperCase() === "OPTIONS") {
+    return {};
+  }
+  const token = readCsrfToken();
+  return token ? { "X-CSRF-Token": token } : {};
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -14,7 +30,10 @@ export async function apiRequest(
 ): Promise<Response> {
   const res = await fetch(url, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers: {
+      ...(data ? { "Content-Type": "application/json" } : {}),
+      ...csrfHeaders(method),
+    },
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });

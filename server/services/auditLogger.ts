@@ -2,16 +2,14 @@ import { InsertAuditLog } from "@shared/schema";
 import { storage } from "../storage";
 import { Request } from "express";
 
-interface AuditLogEntry {
-  userId: string;
-  action: string;
-  resource: string;
-  resourceId?: string | null;
-  ipAddress?: string;
-  userAgent?: string;
-  success: boolean;
-  error?: string | null;
-  metadata?: Record<string, any>;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function metadataString(metadata: unknown, key: string): string | undefined {
+  if (!isRecord(metadata)) return undefined;
+  const value = metadata[key];
+  return typeof value === "string" ? value : undefined;
 }
 
 class AuditLogger {
@@ -40,14 +38,12 @@ class AuditLogger {
 
       await storage.createAuditLog(auditEntry);
 
-      // Log to console for immediate visibility
-      const logLevel = success ? "INFO" : "ERROR";
-      const logMessage = `[${logLevel}] ${userId || "system"} - ${action} on ${resource}${resourceId ? ` (${resourceId})` : ""} - ${success ? "SUCCESS" : "FAILED"}`;
-      
+      // Console sink: static messages only (CodeQL js/log-injection).
+      // Full detail stays in storage.createAuditLog; do not log derived lengths either.
       if (success) {
-        console.log("%s", logMessage);
+        console.log("Audit event recorded: success");
       } else {
-        console.error("%s %s", logMessage, error ?? "");
+        console.error("Audit event recorded: failure");
       }
 
       // Additional security alerting for critical actions
@@ -56,9 +52,8 @@ class AuditLogger {
       }
 
     } catch (auditError) {
-      console.error("Failed to write audit log:", auditError);
-      // Still log to console even if database fails
-      console.error("%s", `AUDIT FAILURE: ${action} by ${userId} on ${resource} - ${success ? "SUCCESS" : "FAILED"}`);
+      console.error("Failed to write audit log");
+      console.error("AUDIT FAILURE");
     }
   }
 
@@ -89,13 +84,11 @@ class AuditLogger {
       }
     );
 
-    // Immediate console output for security events
-    const logMessage = `[SECURITY:${severity.toUpperCase()}] ${eventType} - ${description}`;
-    
+    // Static console messages only — details live in the audit DB row.
     if (severity === "critical" || severity === "high") {
-      console.error(logMessage);
+      console.error("SECURITY event recorded: high");
     } else {
-      console.warn(logMessage);
+      console.warn("SECURITY event recorded: low");
     }
   }
 
@@ -176,15 +169,16 @@ class AuditLogger {
     return auditLogs
       .filter(log => 
         log.action.startsWith("security.") &&
+        log.createdAt != null &&
         log.createdAt >= timeRange.from &&
         log.createdAt <= timeRange.to &&
-        (!severity || log.metadata?.severity === severity)
+        (!severity || metadataString(log.metadata, "severity") === severity)
       )
       .map(log => ({
         id: log.id,
         action: log.action,
-        severity: log.metadata?.severity || "medium",
-        description: log.metadata?.description || log.action,
+        severity: metadataString(log.metadata, "severity") || "medium",
+        description: metadataString(log.metadata, "description") || log.action,
         timestamp: log.createdAt,
         userId: log.userId,
         ipAddress: log.ipAddress,
@@ -206,6 +200,7 @@ class AuditLogger {
     const auditLogs = await storage.getAuditLogs(userId, 1000);
     
     const filteredLogs = auditLogs.filter(log => 
+      log.createdAt != null &&
       log.createdAt >= timeRange.from &&
       log.createdAt <= timeRange.to
     );
@@ -219,7 +214,7 @@ class AuditLogger {
     );
 
     const criticalEvents = filteredLogs.filter(log => 
-      log.metadata?.severity === "critical" || !log.success
+      metadataString(log.metadata, "severity") === "critical" || !log.success
     );
 
     // Count actions
@@ -282,16 +277,14 @@ class AuditLogger {
     return sensitiveResources.some(sensitive => resource.includes(sensitive));
   }
 
-  private async handleCriticalEvent(auditEntry: AuditLogEntry): Promise<void> {
+  private async handleCriticalEvent(auditEntry: InsertAuditLog): Promise<void> {
     // In a production environment, this would:
     // 1. Send alerts to administrators
     // 2. Trigger automated security responses
     // 3. Log to external security monitoring systems
     // 4. Create incident tickets
 
-    const alertMessage = `CRITICAL SECURITY EVENT: ${auditEntry.action} on ${auditEntry.resource} by ${auditEntry.userId}`;
-    
-    console.error("🚨 SECURITY ALERT:", alertMessage);
+    console.error("SECURITY ALERT: critical audit event");
     
     // Here you would integrate with:
     // - Email/SMS alerting systems
@@ -299,13 +292,12 @@ class AuditLogger {
     // - External SIEM systems
     // - Incident management tools
     
-    // For now, we'll just ensure it's logged prominently
     if (auditEntry.error) {
-      console.error("Error details:", auditEntry.error);
+      console.error("Critical event includes error detail");
     }
     
     if (auditEntry.metadata) {
-      console.error("Additional context:", auditEntry.metadata);
+      console.error("Critical event includes metadata");
     }
   }
 }

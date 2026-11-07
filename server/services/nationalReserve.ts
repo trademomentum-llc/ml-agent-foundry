@@ -122,6 +122,9 @@ class NationalReserveService {
       "national_reserve.deploy",
       "agent_system",
       null,
+      null,
+      true,
+      null,
       { deployedCount: deployedAgents.length }
     );
 
@@ -314,6 +317,9 @@ class NationalReserveService {
       "conversation.analyze",
       "communication",
       null,
+      null,
+      true,
+      null,
       {
         context,
         analysisResults: patternAnalysis,
@@ -420,7 +426,7 @@ class NationalReserveService {
     const agents = await storage.getAgents(userId);
     const reserveAgents = agents.filter(a => a.rank && a.commandLevel);
 
-    const commandStructure = {};
+    const commandStructure: Record<string, { count: number; active: number }> = {};
     for (const agent of reserveAgents) {
       const rank = agent.rank || "unknown";
       if (!commandStructure[rank]) {

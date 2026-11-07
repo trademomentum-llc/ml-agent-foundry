@@ -8,6 +8,7 @@ import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
 import rateLimit from "express-rate-limit";
+import { csrfProtection, ensureCsrfToken } from "./middleware/security";
 
 if (!process.env.REPLIT_DOMAINS) {
   throw new Error("Environment variable REPLIT_DOMAINS not provided");
@@ -73,6 +74,10 @@ export async function setupAuth(app: Express) {
   app.use(getSession());
   app.use(passport.initialize());
   app.use(passport.session());
+  // Session cookie is the credential. Mint a CSRF token and require it on
+  // unsafe methods before any route handler runs.
+  app.use(ensureCsrfToken);
+  app.use(csrfProtection);
 
   const config = await getOidcConfig();
 
@@ -133,31 +138,46 @@ export async function setupAuth(app: Express) {
   });
 }
 
+function isUsableToken(token: unknown): token is string {
+  return (
+    typeof token === "string" &&
+    token.length >= 16 &&
+    token.length <= 8192 &&
+    !/\s/.test(token)
+  );
+}
+
 export const isAuthenticated: RequestHandler = async (req, res, next) => {
   const user = req.user as any;
 
-  if (!req.isAuthenticated() || !user.expires_at) {
+  if (!req.isAuthenticated() || !user || !isUsableToken(user.access_token)) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  const expiresAt = user.expires_at;
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
   const now = Math.floor(Date.now() / 1000);
-  if (now <= user.expires_at) {
+  if (now <= expiresAt) {
     return next();
   }
 
   const refreshToken = user.refresh_token;
-  if (!refreshToken) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
+  if (!isUsableToken(refreshToken)) {
+    return res.status(401).json({ message: "Unauthorized" });
   }
 
   try {
     const config = await getOidcConfig();
     const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
     updateUserSession(user, tokenResponse);
+    if (!isUsableToken(user.access_token) || typeof user.expires_at !== "number" || !Number.isFinite(user.expires_at)) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
     return next();
-  } catch (error) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
+  } catch {
+    return res.status(401).json({ message: "Unauthorized" });
   }
 };

@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { securityMiddleware, rateLimiter } from "./middleware/security";
+import rateLimit from "express-rate-limit";
 import { validateRequest } from "./middleware/validation";
 import { agentFactory } from "./services/agentFactory";
 import { taskQueue } from "./services/taskQueue";
@@ -11,6 +12,7 @@ import { auditLogger } from "./services/auditLogger";
 import { foundationModel } from "./services/foundationModel";
 import { insertAgentSchema, insertTaskSchema, insertApprovalSchema } from "@shared/schema";
 import { z } from "zod";
+import { sanitizeForLog } from "./utils/logSanitize";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Security middleware
@@ -19,8 +21,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
 
-  // Rate limiting for API routes
-  app.use("/api", rateLimiter);
+  // Rate limiting for API routes. Constructed inline so the limiter is part
+  // of this router stack (not only a re-exported middleware reference).
+  app.use(
+    "/api",
+    rateLimit({
+      windowMs: 15 * 60 * 1000,
+      max: 100,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: "Too many requests from this IP, please try again later." },
+    }),
+  );
 
   // Auth routes
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -213,16 +225,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       const agentId = req.params.id;
       const action = req.params.action;
-      await auditLogger.log(userId, `agent.${action}`, "agents", agentId, req);
+      // Sanitize only for audit action label; keep raw ids for response/business logic.
+      await auditLogger.log(userId, `agent.${sanitizeForLog(action, 64)}`, "agents", sanitizeForLog(agentId, 64), req);
       
       res.json({ 
-        message: `Agent ${action} completed successfully`,
+        message: "Agent action completed successfully",
         agentId: agentId,
         action: action
       });
     } catch (error: any) {
-      console.error("Error performing agent %s:", req.params.action, error);
-      res.status(500).json({ message: `Failed to ${req.params.action} agent` });
+      // Constant message — never interpolate request params into logs (CodeQL js/log-injection, js/tainted-format-string).
+      console.error("Error performing agent action:", error);
+      res.status(500).json({ message: "Failed to perform agent action" });
     }
   });
 
@@ -725,7 +739,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     ws.on("message", (message) => {
       try {
         const data = JSON.parse(message.toString());
-        console.log("Received WebSocket message:", data);
+        // Do not log raw WS payload (CodeQL js/log-injection).
+        console.log("Received WebSocket message");
         
         // Handle different message types
         switch (data.type) {
@@ -736,7 +751,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Handle subscription to updates
             break;
           default:
-            console.log("Unknown message type:", data.type);
+            console.log("Unknown WebSocket message");
         }
       } catch (error) {
         console.error("Error handling WebSocket message:", error);

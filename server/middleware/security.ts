@@ -1,6 +1,14 @@
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { Request, Response, NextFunction } from "express";
+import crypto from "crypto";
+
+declare module "express-session" {
+  interface SessionData {
+    csrfToken?: string;
+  }
+}
+
 
 // Security headers middleware
 export const securityMiddleware = helmet({
@@ -49,20 +57,43 @@ export const strictRateLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// CSRF protection middleware
+// CSRF protection for cookie-authenticated state-changing requests.
+// Safe methods skip the check. Missing or mismatched tokens are rejected.
 export const csrfProtection = (req: Request, res: Response, next: NextFunction) => {
-  // Skip CSRF for GET requests and API endpoints with proper authentication
-  if (req.method === "GET" || req.path.startsWith("/api/auth/")) {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
     return next();
   }
 
-  const token = req.headers["x-csrf-token"] || req.body._csrf;
+  const headerToken = req.get("x-csrf-token");
+  const bodyToken = typeof req.body?._csrf === "string" ? req.body._csrf : undefined;
+  const provided = headerToken || bodyToken;
   const sessionToken = req.session?.csrfToken;
 
-  if (!token || !sessionToken || token !== sessionToken) {
-    return res.status(403).json({ message: "CSRF token mismatch" });
+  if (!provided || !sessionToken || provided !== sessionToken) {
+    return res.status(403).json({ message: "Invalid or missing CSRF token" });
   }
 
+  next();
+};
+
+// Issue a per-session CSRF token and mirror it to a non-HttpOnly cookie so
+// first-party scripts can echo it back. The session cookie stays HttpOnly.
+export const ensureCsrfToken = (req: Request, res: Response, next: NextFunction) => {
+  if (!req.session) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  let sessionToken = req.session.csrfToken;
+  if (typeof sessionToken !== "string" || sessionToken.length < 32) {
+    sessionToken = crypto.randomBytes(32).toString("hex");
+    req.session.csrfToken = sessionToken;
+  }
+  res.cookie("csrf-token", sessionToken, {
+    httpOnly: false,
+    secure: true,
+    sameSite: "strict",
+    path: "/",
+  });
+  res.setHeader("X-CSRF-Token", sessionToken);
   next();
 };
 
@@ -81,6 +112,7 @@ export const sanitizeInput = (req: Request, res: Response, next: NextFunction) =
               .replace(/'/g, "&#x27;")
               .replace(/\//g, "&#x2F;")
               .trim();
+    }
       
     
     if (Array.isArray(obj)) {

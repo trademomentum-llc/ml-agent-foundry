@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, csrfHeaders } from "@/lib/queryClient";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import Sidebar from "@/components/Layout/Sidebar";
 import Header from "@/components/Layout/Header";
@@ -104,8 +104,10 @@ export default function NationalReserve() {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${localStorage.getItem('token') || ''}`
+          "Authorization": `Bearer ${localStorage.getItem('token') || ''}`,
+          ...csrfHeaders("POST"),
         },
+        credentials: "include",
         body: JSON.stringify({ conversationText: text, context }),
       });
       
