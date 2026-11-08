@@ -45,7 +45,8 @@ const createAgentSchema = z.object({
   auditLoggingEnabled: z.boolean().default(true),
 });
 
-type CreateAgentFormData = z.infer<typeof createAgentSchema>;
+type CreateAgentFormInput = z.input<typeof createAgentSchema>;
+type CreateAgentFormData = z.output<typeof createAgentSchema>;
 
 interface CreateAgentModalProps {
   isOpen: boolean;
@@ -61,7 +62,7 @@ export default function CreateAgentModal({ isOpen, onClose }: CreateAgentModalPr
     enabled: isOpen,
   });
 
-  const form = useForm<CreateAgentFormData>({
+  const form = useForm<CreateAgentFormInput, unknown, CreateAgentFormData>({
     resolver: zodResolver(createAgentSchema),
     defaultValues: {
       name: "",

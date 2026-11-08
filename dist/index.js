@@ -1659,7 +1659,7 @@ var validateRequest = (schema) => {
       next();
     } catch (error) {
       if (error instanceof ZodError) {
-        const validationErrors = error.errors.map((err) => ({
+        const validationErrors = error.issues.map((err) => ({
           field: err.path.join("."),
           message: err.message
         }));
@@ -2418,7 +2418,7 @@ var WorkflowSchema = z.object({
     name: z.string(),
     description: z.string(),
     type: z.enum(["analysis", "action", "decision", "communication"]),
-    parameters: z.record(z.any()),
+    parameters: z.record(z.string(), z.any()),
     expectedOutput: z.string(),
     nextSteps: z.array(z.string())
   })),
